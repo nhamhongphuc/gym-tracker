@@ -1,6 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase } from "@/lib/supabase";
-import type { SetLog } from "@/types/database";
+import type { SetLog, WorkoutSession } from "@/types/database";
 
 export const CACHE_KEYS = {
   WEEKLY_PLANS: "@cached_weekly_plans",
@@ -9,6 +9,11 @@ export const CACHE_KEYS = {
 } as const;
 
 export type OfflineOp =
+  | {
+      type: "create_session";
+      payload: WorkoutSession;
+      queuedAt: string;
+    }
   | {
       type: "upsert_set";
       payload: SetLog;
@@ -26,6 +31,21 @@ export type OfflineOp =
     };
 
 let isFlushing = false;
+
+/**
+ * Generates an RFC4122 v4 UUID without extra native/npm dependencies so
+ * offline-created sessions and set logs receive deterministic Postgres PKs.
+ */
+export function generateUuid(): string {
+  const randomUuid = globalThis.crypto?.randomUUID?.();
+  if (randomUuid) return randomUuid;
+
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (char) => {
+    const rand = (Math.random() * 16) | 0;
+    const value = char === "x" ? rand : (rand & 0x3) | 0x8;
+    return value.toString(16);
+  });
+}
 
 export async function saveCache<T>(key: string, data: T): Promise<void> {
   try {
@@ -64,6 +84,19 @@ export async function getPendingCount(): Promise<number> {
 
 async function executeOfflineOp(op: OfflineOp): Promise<void> {
   switch (op.type) {
+    case "create_session": {
+      const { error } = await supabase.from("workout_sessions").upsert({
+        id: op.payload.id,
+        plan_id: op.payload.plan_id,
+        plan_name_snapshot: op.payload.plan_name_snapshot,
+        session_date: op.payload.session_date,
+        started_at: op.payload.started_at,
+        completed_at: op.payload.completed_at,
+        notes: op.payload.notes,
+      });
+      if (error) throw error;
+      return;
+    }
     case "upsert_set": {
       const payload: Partial<SetLog> = { ...op.payload };
       if (!payload.id) {

@@ -245,8 +245,8 @@ export function CustomExerciseModal({
               style={Shadows.card}
               className="min-h-12 bg-primary rounded-xl flex-row items-center justify-center gap-2"
             >
-              <Ionicons name="checkmark-circle" size={20} color="#0B0F17" />
-              <Text className="text-background text-base font-bold">
+              <Ionicons name="checkmark-circle" size={20} color="#000000" />
+              <Text className="text-black text-base font-extrabold">
                 {saving ? "Saving..." : "Save Custom Exercise"}
               </Text>
             </Pressable>

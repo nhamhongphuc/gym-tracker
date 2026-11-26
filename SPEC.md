@@ -33,6 +33,7 @@ A fast, ultra-lightweight personal cross-platform mobile app (iOS & Android) for
 - **Styling:** `uniwind` + `tailwindcss` (v4) — build-time Tailwind CSS `className` utilities via Metro (`withUniwindConfig`), zero Babel plugins, compatible with Expo Go & React 19
 - **Database:** `@supabase/supabase-js` (Supabase Free Tier PostgreSQL)
 - **Media Caching:** `expo-image` (native animated GIF playback + automatic disk caching)
+- **Vector Graphics:** `react-native-svg` (interactive Front & Back anatomical muscle heatmap)
 - **Local Storage / Offline Queue:** `@react-native-async-storage/async-storage`
 - **Icons:** `@expo/vector-icons` (`Ionicons`)
 - **Seeding Tooling (devDependencies only — excluded from app bundle):** `tsx`, `dotenv`
@@ -42,7 +43,7 @@ A fast, ultra-lightweight personal cross-platform mobile app (iOS & Android) for
 ```bash
 npx create-expo-app@latest gym-tracker
 cd gym-tracker
-npx expo install @supabase/supabase-js @react-native-async-storage/async-storage expo-image @expo/vector-icons
+npx expo install @supabase/supabase-js @react-native-async-storage/async-storage expo-image @expo/vector-icons react-native-svg
 npm install uniwind tailwindcss
 npm install -D tsx dotenv
 ```
@@ -65,6 +66,7 @@ gym-tracker/
 ├── SPEC.md                       # This specification file
 ├── app.json                      # Expo config (iOS bundleIdentifier, Android package, dark UI style)
 ├── metro.config.js               # Expo Metro config wrapped with withUniwindConfig
+├── eslint.config.js              # Expo flat ESLint configuration
 ├── package.json
 ├── tsconfig.json                 # Path alias @/* -> ./src/*
 ├── supabase/
@@ -72,7 +74,7 @@ gym-tracker/
 ├── scripts/
 │   └── seedExercises.ts          # Verified dataset ingester (ExerciseDB + FreeExerciseDB + Wger video match)
 └── src/
-    ├── global.css                # Tailwind v4 + Uniwind entry & @theme dark-mode color tokens
+    ├── global.css                # Tailwind v4 + Uniwind entry & @theme OLED Neon-Lime color tokens
     ├── uniwind-types.d.ts        # Auto-generated Uniwind TypeScript definitions (via Metro)
     ├── constants/
     │   └── theme.ts              # Raw color constants, touch targets, and cross-platform shadows
@@ -80,21 +82,23 @@ gym-tracker/
     │   └── database.ts           # Strict TypeScript interfaces matching Supabase tables
     ├── lib/
     │   ├── supabase.ts           # Supabase client configured with AsyncStorage
-    │   ├── offlineQueue.ts       # AsyncStorage cache & failed-write retry queue
-    │   └── api.ts                # All Supabase CRUD queries + previous-session lookup + stats
+    │   ├── offlineQueue.ts       # AsyncStorage cache, client UUIDs & failed-write retry queue
+    │   ├── api.ts                # All Supabase CRUD queries + previous-session lookup + stats
+    │   └── smartCoach.ts         # Smart Trainer overload math, 30-day muscle analytics & swap ranker
     ├── components/
-    │   ├── RestTimerBar.tsx      # Floating countdown bar (-15s, +15s, Skip, Vibration on 0)
-    │   ├── SetRow.tsx            # Set #, type cycler, previous ghost value, kg/reps inputs, checkmark
+    │   ├── RestTimerBar.tsx      # Floating countdown capsule (-15s, +15s, Skip, Vibration on 0)
+    │   ├── SetRow.tsx            # Circular set badge, previous ghost value, kg/reps inputs, checkmark
+    │   ├── MuscleBodyMap.tsx     # Interactive Front & Back SVG anatomical muscle heatmap
     │   ├── ExercisePickerModal.tsx   # Searchable modal with muscle/equipment filters & GIF thumbnails
     │   └── CustomExerciseModal.tsx   # Modal to add a personal custom exercise to Supabase
     └── app/
         ├── _layout.tsx           # Root Stack (imports ../global.css, hosts "(tabs)" and "exercise/[id]")
         ├── (tabs)/
-        │   ├── _layout.tsx       # 4-tab dark bottom navigation bar
-        │   ├── index.tsx         # Tab 1: Today's Active Workout Logger
+        │   ├── _layout.tsx       # 4-tab OLED bottom navigation bar
+        │   ├── index.tsx         # Tab 1: Active Workout Logger + Smart Trainer + Mid-Workout Swap
         │   ├── plan.tsx          # Tab 2: Weekly Split Plan Builder (Mon–Sun)
-        │   ├── exercises.tsx     # Tab 3: Verified Exercise Library
-        │   └── history.tsx       # Tab 4: Workout History & Weekly Volume Stats
+        │   ├── exercises.tsx     # Tab 3: Verified Exercise Library (Muscle + Equipment filters)
+        │   └── history.tsx       # Tab 4: History Overview Bar Chart & Anatomical Muscles/Recovery
         └── exercise/
             └── [id].tsx          # Modal: GIF/Images, Video Link Editor, Instructions, Muscle Chips & PR History
 ```
@@ -376,27 +380,27 @@ export interface ExercisePRStats {
 
 ## 7. Design System & Theme Tokens (`src/global.css` & `src/constants/theme.ts`)
 
-High-contrast gym dark mode designed for one-handed logging between sets:
+High-contrast OLED pitch-black + Electric Neon Lime gym dark mode inspired by SmartGym, designed for one-handed logging between sets:
 
-- `background`: `#0B0F17`
-- `surface`: `#161C28`
-- `surfaceElevated`: `#1E2638`
-- `mediaFrame`: `#F3F4F6` (clean light container for ExerciseDB GIFs)
-- `primary`: `#10B981` (Emerald — active buttons, completed sets, PR highlights)
-- `primarySubtle`: `rgba(16, 185, 129, 0.14)` (Completed set row tint)
-- `accent`: `#3B82F6` (Blue — rest timer, links, info badges)
-- `warning`: `#F59E0B` (Amber — warm-up badge, personal cues)
-- `purple`: `#A855F7` (Dropset badge)
-- `danger`: `#EF4444` (Failure badge, delete actions)
-- `textPrimary`: `#F9FAFB`
-- `textSecondary`: `#9CA3AF`
-- `textMuted`: `#4B5563` (Ghost placeholders for previous weight/reps)
-- `border`: `#263042`
+- `background`: `#000000` (OLED pitch black)
+- `surface`: `#141417` (Elevated dark card)
+- `surfaceElevated`: `#1F1F24` (Inputs, secondary pills, floating timer capsule)
+- `mediaFrame`: `#F4F4F5` (clean light container for ExerciseDB GIFs)
+- `primary`: `#9EFF00` (Electric Neon Lime — active buttons, completed sets, circular day pills, workout bars, PR highlights; pair with `#000000` text on solid fills)
+- `primarySubtle`: `rgba(158, 255, 0, 0.14)` (Completed set row tint)
+- `accent`: `#0A84FF` (Electric Blue — Smart Trainer progressive overload callouts, rest timer, links)
+- `warning`: `#FFD60A` (Amber — warm-up badge, personal cues)
+- `purple`: `#BF5AF2` (Dropset badge)
+- `danger`: `#FF375F` (Coral-crimson — volume hero card, failure badge, delete actions)
+- `textPrimary`: `#FFFFFF`
+- `textSecondary`: `#8E8E93`
+- `textMuted`: `#48484A` (Ghost placeholders for previous weight/reps)
+- `border`: `#26262B`
 - **Minimum Interactive Target:** `44px × 44px` (`min-h-11 min-w-11` in Tailwind) on all checkboxes, timer controls, and icons.
 
 ### Uniwind Styling Conventions
 
-- Define all color tokens as Tailwind v4 `@theme` variables inside `src/global.css` (e.g., `--color-background: #0B0F17`, `--color-surface: #161C28`, `--color-primary: #10B981`, `--color-text-primary: #F9FAFB`, etc.) so screens and components use utility classes directly (`className="bg-background text-text-primary"`).
+- Define all color tokens as Tailwind v4 `@theme` variables inside `src/global.css` (e.g., `--color-background: #000000`, `--color-surface: #141417`, `--color-primary: #9EFF00`, `--color-text-primary: #FFFFFF`, etc.) so screens and components use utility classes directly (`className="bg-background text-text-primary"`).
 - Keep matching raw constants in `src/constants/theme.ts` (`Colors`, `TouchTarget`, `Shadows`) for native props that do not accept `className` (such as `Ionicons` `color`, Expo Router tab/header options, `placeholderTextColor`, and `Platform.select` shadows).
 - Wrap third-party components that only accept `style` (e.g., `SafeAreaView` from `react-native-safe-area-context` or `Image` from `expo-image`) with `withUniwind(...)` from `uniwind` when styling them via `className`.
 
@@ -443,55 +447,56 @@ Create the Supabase client using `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUP
 
 ## 9. Detailed Screen Specifications
 
-### Tab 1: Today's Active Workout Logger (`app/(tabs)/index.tsx`)
+### Tab 1: Today's Active Workout Logger (`src/app/(tabs)/index.tsx`)
 
-- **Top Bar:**
-  - Current day label & plan name (e.g., `"Monday • Push (Chest, Shoulders, Triceps)"`).
-  - Horizontal 7-day pill selector (`M T W T F S S`) defaulting to today (ISO weekday `1..7`), allowing quick switching if a gym day shifts.
-  - Conditional **Offline Sync Pill** showing pending queued sets count (tappable to flush immediately).
-  - `"Finish"` primary button (enabled once at least 1 set is completed) that prompts for optional session notes and marks `completed_at`.
+- **Editorial Top Bar:**
+  - Neon-lime eyebrow (`MONDAY • N EXERCISES`), live elapsed workout timer pill once a session is active, and large bold split name.
+  - Circular neon-lime 7-day selector (`M T W T F S S`) defaulting to today (ISO weekday `1..7`), allowing quick switching if a gym day shifts.
+  - Conditional **Offline Sync Pill** showing pending queued count (tappable to flush immediately).
+  - `"Finish"` primary pill (enabled once at least 1 set is completed) opening a cross-platform completion modal for optional session notes and marking `completed_at`.
 - **Rest Day Empty State:**
-  - If `is_rest_day` is true, display recovery notes plus a secondary `"Log Another Day's Split"` prompt pointing to the 7-day pill bar.
+  - If `is_rest_day` is true, display recovery notes plus a `"Log Another Day's Split"` prompt pointing to the `M–S` circle selector.
 - **Exercise Cards (`ScrollView` + platform-aware `KeyboardAvoidingView` — `behavior="padding"` on iOS, resize/height handling on Android):**
-  - **Header:** Small rounded `expo-image` GIF/thumbnail preview (`44×44`), Exercise Name, Equipment & Muscle subtitle, Target pill (`3 × 8-10 • 120s`), and Info Icon (`information-circle-outline`) opening `/exercise/[id]` modal without resetting active inputs.
-  - **Set Rows (`components/SetRow.tsx`):**
+  - **Header:** Small rounded `expo-image` GIF/thumbnail preview (`48×48`), Exercise index (`1 of N`), Exercise Name, Equipment & Muscle subtitle, Target summary (`3×8-10 • 120s`), **Mid-Workout Swap (`swap-horizontal-outline`)** opening a `"Machine Taken?"` modal ranked by `rankSwapAlternatives`, and **Info Icon (`information-circle-outline`)** opening `/exercise/[id]` without resetting active inputs.
+  - **Smart Trainer Progressive Overload Callout:** Powered by `computeSmartSuggestion` in `src/lib/smartCoach.ts` — analyzes previous session sets against `target_reps` to recommend weight bumps (`+2.5kg` / `+2kg`) or rep progression, with a 1-tap **`Apply`** button that pre-fills uncompleted working sets.
+  - **Set Rows (`src/components/SetRow.tsx`):**
     - Columns: `SET` | `PREVIOUS` | `KG` | `REPS` | `✓`
-    - `SET`: Tapping cycles set type: Working (`1, 2, 3`) -> Warm-up (`W`, Amber) -> Dropset (`D`, Purple) -> Failure (`F`, Red).
+    - `SET`: Circular SmartGym badge (`w-9 h-9 rounded-full`). Tapping cycles set type: Working (`1, 2, 3`) -> Warm-up (`W`, Amber) -> Dropset (`D`, Purple) -> Failure (`F`, Coral-Crimson). Completed working circles glow solid neon lime (`#9EFF00`) with black numerals.
     - `PREVIOUS`: Displays ghost text from last session (e.g., `70kg × 8`). Tapping copies both values into the row's `KG` and `REPS` inputs.
-    - `KG` & `REPS`: `decimal-pad` and `number-pad` inputs with previous session numbers shown as muted placeholders.
+    - `KG` & `REPS`: `decimal-pad` (normalizing `,` -> `.`) and `number-pad` inputs with previous session numbers shown as muted placeholders.
     - `✓` Button:
       - If `KG` or `REPS` is blank when tapped, auto-fills from `prev_weight_kg` and `prev_reps`.
       - Persists via `upsertSetLog`, highlights row with `primarySubtle`, and triggers `RestTimerBar` using the exercise's `rest_seconds` (if `rest_seconds > 0`).
       - Tapping a completed `✓` again uncompletes/deletes the saved log.
   - **Card Footer:** `"+ Add Set"` and `"- Remove Set"` actions.
-- **Floating Rest Timer (`components/RestTimerBar.tsx`):**
-  - Pinned above the bottom tab bar whenever active.
+- **Floating Rest Timer (`src/components/RestTimerBar.tsx`):**
+  - Floating capsule pinned above the bottom tab bar whenever active.
   - Displays countdown (`MM:SS`), linear progress bar, `"-15s"`, `"+15s"`, and `"Skip"` buttons.
   - Triggers `Vibration.vibrate(...)` at `00:00` (using `Platform.OS` to handle iOS vs. Android pattern array differences cleanly; note that simulators/emulators do not physically vibrate) and auto-dismisses after 2 seconds.
 
-### Tab 2: Weekly Split Plan Builder (`app/(tabs)/plan.tsx`)
+### Tab 2: Weekly Split Plan Builder (`src/app/(tabs)/plan.tsx`)
 
-- **Day Tabs:** `Mon`–`Sun` horizontal selector bar.
-- **Day Settings Card:**
-  - Plan Name `TextInput`, `"Rest Day"` `Switch`, Day Notes `TextInput`, and `"Save Day Settings"` button with saved confirmation feedback.
+- **Day Tabs:** Circular neon-lime `M`–`S` selector bar with dot indicators.
+- **Routine Details Card:**
+  - Routine Name `TextInput`, `"Rest Day"` `Switch`, Day Notes `TextInput`, and `"Save Day Settings"` button with saved confirmation feedback.
 - **Exercise List (when not a rest day):**
-  - Each card shows `expo-image` thumbnail, Exercise Name, Muscle/Equipment subtitle, Up/Down reorder buttons (`↑` / `↓`), Remove Trash icon, and 3 compact inline editors:
+  - Each card shows `expo-image` thumbnail, Exercise order & Name, Muscle/Equipment subtitle, Up/Down reorder buttons (`↑` / `↓`), Remove Trash icon, and 3 compact inline editors:
     - `Sets` (`number-pad`)
     - `Reps` (`default`, e.g., `"8-10"` or `"15-20 min"`)
     - `Rest (s)` (`number-pad`)
-  - Edits persist on blur or save button.
-- **Bottom Action:** `"+ Add Exercise to Day"` button opening `ExercisePickerModal` (which filters the 1,500+ verified library by search query and muscle group chips and adds directly to `plan_exercises`).
+  - Edits persist on blur.
+- **Bottom Action:** `"Add Exercise to <Day>"` button opening `ExercisePickerModal` (which filters the verified library by search query, muscle group chips, and equipment chips and adds directly to `plan_exercises`).
 
-### Tab 3: Verified Exercise Library (`app/(tabs)/exercises.tsx`)
+### Tab 3: Verified Exercise Library (`src/app/(tabs)/exercises.tsx`)
 
-- **Header:** Search bar (`"Search 1,500+ exercises..."`) + horizontal Muscle Group filter chips (`All`, `Chest`, `Back`, `Shoulders`, `Legs`, `Arms`, `Core`, `Cardio`).
+- **Header:** Editorial title + Search bar + horizontal Muscle Group filter chips (`All`, `Chest`, `Back`, `Shoulders`, `Legs`, `Arms`, `Core`, `Cardio`) + horizontal Equipment filter chips (`All`, `Barbell`, `Dumbbell`, `Cable`, `Machine`, `Bodyweight`, `Kettlebell`).
 - **Virtualized List (`FlatList`):**
   - Uses `initialNumToRender={15}` and `windowSize={7}` for smooth 60fps scrolling.
   - Each row renders a disk-cached `expo-image` preview (`52×52` inside `mediaFrame`), Exercise Name, Muscle Group & Equipment badges, and a chevron opening `/exercise/[id]`.
   - Footer displays `"Exercise data & GIFs provided by AscendAPI (ExerciseDB)"`.
 - **FAB (`+ Custom`):** Opens `CustomExerciseModal` to save custom movements (`name`, `muscle_group`, `equipment`, newline-separated `instructions`, optional `tips`, optional `video_url`).
 
-### Modal: Exercise Detail, Media & PR History (`app/exercise/[id].tsx`)
+### Modal: Exercise Detail, Media & PR History (`src/app/exercise/[id].tsx`)
 
 Presented as a native modal screen (`presentation: 'modal'` in `app/_layout.tsx` — native sheet on iOS, slide-up modal with hardware Back support on Android).
 
@@ -511,13 +516,16 @@ Presented as a native modal screen (`presentation: 'modal'` in `app/_layout.tsx`
    - Last 5 workout dates showing all performed sets for this exercise.
 7. **Source Attribution:** Small muted footer (`"Source: ExerciseDB (AscendAPI)"` / `"Source: Free Exercise DB"` / `"Custom Exercise"`).
 
-### Tab 4: Workout History (`app/(tabs)/history.tsx`)
+### Tab 4: Workout History & Muscle Analytics (`src/app/(tabs)/history.tsx`)
 
-- **Weekly Summary Banner (Current Mon–Sun):** 3 stat cards — **Workouts**, **Sets Logged**, and **Total Volume (`kg`)** (`Σ weight_kg × reps`).
-- **Session History List (`FlatList`):**
-  - Reverse-chronological completed sessions showing Date, Plan Name, Duration (`started_at` to `completed_at`), Exercise Count, and Total Volume.
-  - Tapping a card expands the full exercise-by-exercise set log breakdown.
-  - Includes a Delete Session icon with `Alert.alert` confirmation.
+- **Segmented Switcher (`Overview` | `Muscles & Recovery`):**
+  - **Overview View:**
+    - **Workouts This Month Hero Card (`#9EFF00`):** Large monthly workout count + **14-Day Vertical Neon-Lime Bar Chart** showing daily volume bars.
+    - **Weekly Volume Hero Card (`#FF375F`):** Coral-crimson total `kg` lifted this week + sets count + monthly volume subtitle.
+    - **Session History List (`FlatList`):** Reverse-chronological completed sessions showing Date, Plan Name, Duration, Exercise Count, Total Volume, expandable exercise-by-exercise set log breakdown, and Delete Session confirmation (`Alert.alert`).
+  - **Muscles & Recovery View:**
+    - **Interactive `MuscleBodyMap` (`src/components/MuscleBodyMap.tsx`):** Dual Front & Back anatomical SVG silhouettes glowing in `#9EFF00` proportionally to 30-day set volume; tapping any muscle group filters the breakdown list below.
+    - **Muscle Recovery Cards:** Shows 72-hour recovery readiness (`Fresh` / `Recovering` / `Fatigued`), sets & volume, intensity bar, and performed exercise names per muscle group.
 
 ---
 

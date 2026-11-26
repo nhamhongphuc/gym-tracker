@@ -11,6 +11,7 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { CustomExerciseModal } from "@/components/CustomExerciseModal";
 import { Colors, Shadows } from "@/constants/theme";
 import { fetchExercises } from "@/lib/api";
@@ -27,6 +28,16 @@ const MUSCLE_FILTERS = [
   "Cardio",
 ] as const;
 
+const EQUIPMENT_FILTERS = [
+  "All",
+  "Barbell",
+  "Dumbbell",
+  "Cable",
+  "Machine",
+  "Body",
+  "Kettlebell",
+] as const;
+
 export default function ExercisesScreen() {
   const [exercises, setExercises] = useState<Exercise[]>([]);
   const [loading, setLoading] = useState(true);
@@ -34,12 +45,13 @@ export default function ExercisesScreen() {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [selectedMuscle, setSelectedMuscle] = useState<string>("All");
+  const [selectedEquipment, setSelectedEquipment] = useState<string>("All");
   const [modalVisible, setModalVisible] = useState(false);
 
   const loadExercises = useCallback(async (forceRefresh = false) => {
     try {
-      setError(null);
       const data = await fetchExercises({ forceRefresh });
+      setError(null);
       setExercises(data);
     } catch (err) {
       setError(
@@ -52,13 +64,39 @@ export default function ExercisesScreen() {
   }, []);
 
   useEffect(() => {
-    loadExercises(false);
-  }, [loadExercises]);
+    let active = true;
+    fetchExercises({ forceRefresh: false })
+      .then((data) => {
+        if (!active) return;
+        setError(null);
+        setExercises(data);
+      })
+      .catch((err) => {
+        if (!active) return;
+        setError(
+          err instanceof Error ? err.message : "Failed to load exercises."
+        );
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const filteredExercises = useMemo(() => {
     const query = search.trim().toLowerCase();
+    const eqFilter = selectedEquipment.toLowerCase();
+
     return exercises.filter((ex) => {
       if (selectedMuscle !== "All" && ex.muscle_group !== selectedMuscle) {
+        return false;
+      }
+      if (
+        selectedEquipment !== "All" &&
+        !ex.equipment.toLowerCase().includes(eqFilter)
+      ) {
         return false;
       }
       if (!query) return true;
@@ -69,7 +107,7 @@ export default function ExercisesScreen() {
         ex.target_muscles.some((m) => m.toLowerCase().includes(query))
       );
     });
-  }, [exercises, search, selectedMuscle]);
+  }, [exercises, search, selectedMuscle, selectedEquipment]);
 
   function handleExerciseCreated(created: Exercise) {
     setExercises((prev) =>
@@ -102,13 +140,13 @@ export default function ExercisesScreen() {
         <View className="flex-1">
           <Text
             numberOfLines={1}
-            className="text-text-primary text-base font-semibold"
+            className="text-text-primary text-base font-bold"
           >
             {item.name}
           </Text>
           <View className="flex-row items-center gap-2 mt-1">
             <View className="px-2 py-0.5 rounded-md bg-primary-subtle">
-              <Text className="text-primary text-xs font-semibold">
+              <Text className="text-primary text-xs font-bold">
                 {item.muscle_group}
               </Text>
             </View>
@@ -128,15 +166,27 @@ export default function ExercisesScreen() {
   }, []);
 
   return (
-    <View className="flex-1 bg-background">
-      {/* Search + Muscle Filter Header */}
-      <View className="pt-3 pb-2 bg-surface border-b border-border">
+    <SafeAreaView
+      edges={["top"]}
+      style={{ flex: 1, backgroundColor: Colors.background }}
+    >
+      {/* Editorial SmartGym Header + Filters */}
+      <View className="pt-2 pb-3 bg-surface border-b border-border gap-2.5">
+        <View className="px-4 flex-row items-baseline justify-between">
+          <Text className="text-text-primary text-2xl font-extrabold">
+            Exercises
+          </Text>
+          <Text className="text-primary text-xs font-bold">
+            {filteredExercises.length} of {exercises.length}
+          </Text>
+        </View>
+
         <View className="mx-4 px-3 min-h-11 rounded-xl bg-surface-elevated border border-border flex-row items-center gap-2">
           <Ionicons name="search" size={18} color={Colors.textSecondary} />
           <TextInput
             value={search}
             onChangeText={setSearch}
-            placeholder="Search 1,500+ exercises..."
+            placeholder="Search exercises, muscles, equipment..."
             placeholderTextColor={Colors.textMuted}
             autoCorrect={false}
             className="flex-1 text-text-primary text-sm py-2"
@@ -155,10 +205,11 @@ export default function ExercisesScreen() {
           )}
         </View>
 
+        {/* Muscle Filter Chips */}
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
-          contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 10, gap: 8 }}
+          contentContainerStyle={{ paddingHorizontal: 16, gap: 8 }}
         >
           {MUSCLE_FILTERS.map((muscle) => {
             const active = selectedMuscle === muscle;
@@ -168,16 +219,47 @@ export default function ExercisesScreen() {
                 onPress={() => setSelectedMuscle(muscle)}
                 className={`min-h-9 px-3.5 rounded-full border items-center justify-center ${
                   active
-                    ? "bg-primary-subtle border-primary"
+                    ? "bg-primary border-primary"
                     : "bg-surface-elevated border-border"
                 }`}
               >
                 <Text
-                  className={`text-xs font-semibold ${
-                    active ? "text-primary" : "text-text-secondary"
+                  className={`text-xs font-bold ${
+                    active ? "text-black" : "text-text-secondary"
                   }`}
                 >
                   {muscle}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+
+        {/* Equipment Filter Chips */}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={{ paddingHorizontal: 16, gap: 8 }}
+        >
+          {EQUIPMENT_FILTERS.map((eq) => {
+            const active = selectedEquipment === eq;
+            const label = eq === "Body" ? "Bodyweight" : eq;
+            return (
+              <Pressable
+                key={eq}
+                onPress={() => setSelectedEquipment(eq)}
+                className={`min-h-8 px-3 rounded-lg border items-center justify-center ${
+                  active
+                    ? "bg-accent/20 border-accent"
+                    : "bg-background border-border"
+                }`}
+              >
+                <Text
+                  className={`text-[11px] font-semibold ${
+                    active ? "text-accent" : "text-text-secondary"
+                  }`}
+                >
+                  {eq === "All" ? "All Equipment" : label}
                 </Text>
               </Pressable>
             );
@@ -203,7 +285,7 @@ export default function ExercisesScreen() {
             onPress={() => loadExercises(true)}
             className="min-h-11 px-5 rounded-xl bg-primary items-center justify-center"
           >
-            <Text className="text-background text-sm font-bold">Retry</Text>
+            <Text className="text-black text-sm font-extrabold">Retry</Text>
           </Pressable>
         </View>
       ) : (
@@ -223,7 +305,8 @@ export default function ExercisesScreen() {
           ListEmptyComponent={
             <View className="items-center justify-center py-16 px-6">
               <Text className="text-text-secondary text-sm text-center">
-                No exercises match &ldquo;{search || selectedMuscle}&rdquo;.
+                No exercises match &ldquo;
+                {search || `${selectedMuscle} / ${selectedEquipment}`}&rdquo;.
               </Text>
             </View>
           }
@@ -241,8 +324,8 @@ export default function ExercisesScreen() {
         style={Shadows.card}
         className="absolute right-4 bottom-4 min-h-12 px-4 rounded-full bg-primary flex-row items-center gap-1.5"
       >
-        <Ionicons name="add" size={20} color="#0B0F17" />
-        <Text className="text-background text-sm font-bold">Custom</Text>
+        <Ionicons name="add" size={20} color="#000000" />
+        <Text className="text-black text-sm font-extrabold">Custom</Text>
       </Pressable>
 
       <CustomExerciseModal
@@ -250,6 +333,6 @@ export default function ExercisesScreen() {
         onClose={() => setModalVisible(false)}
         onCreated={handleExerciseCreated}
       />
-    </View>
+    </SafeAreaView>
   );
 }

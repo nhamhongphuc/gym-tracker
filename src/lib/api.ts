@@ -1,6 +1,7 @@
 import {
   CACHE_KEYS,
   enqueueOfflineOp,
+  generateUuid,
   loadCache,
   saveCache,
 } from "@/lib/offlineQueue";
@@ -328,24 +329,25 @@ export async function getLastPerformedSets(
   return ((data ?? []) as SetLog[]).map(normalizeSetLog);
 }
 
-export async function getOrCreateTodaySession(
-  plan: WorkoutPlan
-): Promise<{ session: WorkoutSession; existingLogs: SetLog[] }> {
+export async function fetchActiveTodaySession(
+  planId: string
+): Promise<{ session: WorkoutSession | null; existingLogs: SetLog[] }> {
   const today = getLocalDateString();
 
-  const { data: existingSession, error: findError } = await supabase
-    .from("workout_sessions")
-    .select("*")
-    .eq("session_date", today)
-    .eq("plan_id", plan.id)
-    .is("completed_at", null)
-    .order("started_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  try {
+    const { data: existingSession, error: findError } = await supabase
+      .from("workout_sessions")
+      .select("*")
+      .eq("session_date", today)
+      .eq("plan_id", planId)
+      .is("completed_at", null)
+      .order("started_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
-  if (findError) throw findError;
+    if (findError) throw findError;
+    if (!existingSession) return { session: null, existingLogs: [] };
 
-  if (existingSession) {
     const { data: logs, error: logsError } = await supabase
       .from("set_logs")
       .select("*")
@@ -358,36 +360,78 @@ export async function getOrCreateTodaySession(
       session: existingSession as WorkoutSession,
       existingLogs: ((logs ?? []) as SetLog[]).map(normalizeSetLog),
     };
+  } catch (err) {
+    console.warn("[api] fetchActiveTodaySession failed:", err);
+    return { session: null, existingLogs: [] };
   }
+}
 
-  const { data: created, error: createError } = await supabase
-    .from("workout_sessions")
-    .insert({
+export async function getOrCreateTodaySession(
+  plan: WorkoutPlan
+): Promise<{ session: WorkoutSession; existingLogs: SetLog[] }> {
+  const today = getLocalDateString();
+
+  try {
+    const existing = await fetchActiveTodaySession(plan.id);
+    if (existing.session) {
+      return { session: existing.session, existingLogs: existing.existingLogs };
+    }
+
+    const id = generateUuid();
+    const { data: created, error: createError } = await supabase
+      .from("workout_sessions")
+      .insert({
+        id,
+        plan_id: plan.id,
+        plan_name_snapshot: plan.name,
+        session_date: today,
+      })
+      .select("*")
+      .single();
+
+    if (createError) throw createError;
+
+    return {
+      session: created as WorkoutSession,
+      existingLogs: [],
+    };
+  } catch (err) {
+    console.warn(
+      "[api] getOrCreateTodaySession failed, creating optimistic offline session:",
+      err
+    );
+    const nowIso = new Date().toISOString();
+    const optimisticSession: WorkoutSession = {
+      id: generateUuid(),
       plan_id: plan.id,
       plan_name_snapshot: plan.name,
       session_date: today,
-    })
-    .select("*")
-    .single();
+      started_at: nowIso,
+      completed_at: null,
+      notes: null,
+    };
 
-  if (createError) throw createError;
+    await enqueueOfflineOp({
+      type: "create_session",
+      payload: optimisticSession,
+      queuedAt: nowIso,
+    });
 
-  return {
-    session: created as WorkoutSession,
-    existingLogs: [],
-  };
+    return {
+      session: optimisticSession,
+      existingLogs: [],
+    };
+  }
 }
 
 export async function upsertSetLog(payload: SetLog): Promise<SetLog> {
-  const cleanPayload: Partial<SetLog> = { ...payload };
-  if (!cleanPayload.id) {
-    delete cleanPayload.id;
-  }
+  const id = payload.id || generateUuid();
+  const payloadWithId: SetLog = { ...payload, id };
 
   try {
     const { data, error } = await supabase
       .from("set_logs")
-      .upsert(cleanPayload)
+      .upsert(payloadWithId)
       .select("*")
       .single();
 
@@ -397,10 +441,10 @@ export async function upsertSetLog(payload: SetLog): Promise<SetLog> {
     console.warn("[api] upsertSetLog failed, queueing offline op:", err);
     await enqueueOfflineOp({
       type: "upsert_set",
-      payload,
+      payload: payloadWithId,
       queuedAt: new Date().toISOString(),
     });
-    return normalizeSetLog(payload);
+    return normalizeSetLog(payloadWithId);
   }
 }
 

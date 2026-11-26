@@ -2,18 +2,18 @@
 @import "uniwind";
 
 @theme {
-  --color-background: #0b0f17;
-  --color-surface: #161c28;
-  --color-surface-elevated: #1e2638;
-  --color-media-frame: #f3f4f6;
-  --color-primary: #10b981;
-  --color-primary-subtle: rgba(16, 185, 129, 0.14);
-  --color-accent: #3b82f6;
-  --color-warning: #f59e0b;
-  --color-purple: #a855f7;
-  --color-danger: #ef4444;
-  --color-text-primary: #f9fafb;
-  --color-text-secondary: #9ca3af;
-  --color-text-muted: #4b5563;
-  --color-border: #263042;
+  --color-background: #000000;
+  --color-surface: #141417;
+  --color-surface-elevated: #1F1F24;
+  --color-media-frame: #F4F4F5;
+  --color-primary: #9EFF00;
+  --color-primary-subtle: rgba(158, 255, 0, 0.14);
+  --color-accent: #0A84FF;
+  --color-warning: #FFD60A;
+  --color-purple: #BF5AF2;
+  --color-danger: #FF375F;
+  --color-text-primary: #FFFFFF;
+  --color-text-secondary: #8E8E93;
+  --color-text-muted: #48484A;
+  --color-border: #26262B;
 }

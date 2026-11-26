@@ -1,20 +1,20 @@
 import { Platform, type ViewStyle } from "react-native";
 
 export const Colors = {
-  background: "#0B0F17",
-  surface: "#161C28",
-  surfaceElevated: "#1E2638",
-  mediaFrame: "#F3F4F6",
-  primary: "#10B981",
-  primarySubtle: "rgba(16, 185, 129, 0.14)",
-  accent: "#3B82F6",
-  warning: "#F59E0B",
-  purple: "#A855F7",
-  danger: "#EF4444",
-  textPrimary: "#F9FAFB",
-  textSecondary: "#9CA3AF",
-  textMuted: "#4B5563",
-  border: "#263042",
+  background: "#000000",
+  surface: "#141417",
+  surfaceElevated: "#1F1F24",
+  mediaFrame: "#F4F4F5",
+  primary: "#9EFF00",
+  primarySubtle: "rgba(158, 255, 0, 0.14)",
+  accent: "#0A84FF",
+  warning: "#FFD60A",
+  purple: "#BF5AF2",
+  danger: "#FF375F",
+  textPrimary: "#FFFFFF",
+  textSecondary: "#8E8E93",
+  textMuted: "#48484A",
+  border: "#26262B",
 } as const;
 
 export const TouchTarget = {
@@ -42,11 +42,11 @@ export const Shadows: { card: ViewStyle } = {
       ios: {
         shadowColor: "#000000",
         shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.25,
-        shadowRadius: 4,
+        shadowOpacity: 0.35,
+        shadowRadius: 6,
       },
       android: {
-        elevation: 3,
+        elevation: 4,
       },
       default: {},
     }) ?? {},
