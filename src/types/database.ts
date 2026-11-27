@@ -10,6 +10,22 @@ export type MuscleGroup =
 
 export type SetType = "warmup" | "working" | "dropset" | "failure";
 
+export type ScheduleMode = "rolling" | "weekly";
+
+export interface ProgramScheduleAnchor {
+  date: string; // YYYY-MM-DD
+  routineId: string;
+}
+
+export type ProgramDateOverride =
+  | { kind: "single"; routineId: string | "REST" }
+  | { kind: "rest_push" };
+
+export interface ProgramScheduleState {
+  anchors?: ProgramScheduleAnchor[];
+  overrides?: Record<string, ProgramDateOverride>;
+}
+
 export interface Exercise {
   id: string;
   external_id: string | null;
@@ -20,6 +36,7 @@ export interface Exercise {
   secondary_muscles: string[];
   equipment: string;
   instructions: string[];
+  instructions_vi: string[];
   tips: string | null;
   gif_url: string | null;
   image_urls: string[];
@@ -27,9 +44,24 @@ export interface Exercise {
   created_at?: string;
 }
 
+export interface WorkoutProgram {
+  id: string;
+  name: string;
+  description: string | null;
+  schedule_mode: ScheduleMode;
+  is_active: boolean;
+  next_routine_id: string | null;
+  schedule_state?: ProgramScheduleState | null;
+  created_at?: string;
+  workout_plans?: WorkoutPlan[];
+}
+
 export interface WorkoutPlan {
   id: string;
-  day_of_week: number; // 1 (Mon) to 7 (Sun)
+  program_id: string;
+  order_index: number;
+  day_of_week: number | null; // 1 (Mon) to 7 (Sun) in weekly mode
+  short_label: string | null;
   name: string;
   is_rest_day: boolean;
   notes: string | null;
@@ -39,6 +71,7 @@ export interface WorkoutPlan {
 export interface PlanExercise {
   id: string;
   plan_id: string;
+  routine_id?: string;
   exercise_id: string;
   order_index: number;
   target_sets: number;
@@ -53,6 +86,7 @@ export interface PlanExerciseWithDetails extends PlanExercise {
 export interface WorkoutSession {
   id: string;
   plan_id: string | null;
+  routine_id?: string | null;
   plan_name_snapshot: string;
   session_date: string; // YYYY-MM-DD
   started_at: string;

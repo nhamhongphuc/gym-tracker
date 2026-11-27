@@ -14,6 +14,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Colors, Shadows } from "@/constants/theme";
+import { useI18n } from "@/i18n/LanguageContext";
 import { createCustomExercise } from "@/lib/api";
 import type { Exercise, MuscleGroup } from "@/types/database";
 
@@ -39,6 +40,7 @@ export function CustomExerciseModal({
   onClose,
   onCreated,
 }: CustomExerciseModalProps) {
+  const { locale, dict, tMuscle } = useI18n();
   const [name, setName] = useState("");
   const [muscleGroup, setMuscleGroup] = useState<MuscleGroup>("Chest");
   const [equipment, setEquipment] = useState("Dumbbell");
@@ -64,7 +66,10 @@ export function CustomExerciseModal({
   async function handleSave() {
     const trimmedName = name.trim();
     if (!trimmedName) {
-      Alert.alert("Missing Name", "Please enter an exercise name.");
+      Alert.alert(
+        dict.customModal.missingNameTitle,
+        dict.customModal.missingNameBody
+      );
       return;
     }
 
@@ -82,6 +87,7 @@ export function CustomExerciseModal({
         secondary_muscles: [],
         equipment: equipment.trim() || "Bodyweight",
         instructions,
+        instructions_vi: locale === "vi" ? instructions : [],
         tips: tips.trim() || null,
         gif_url: null,
         image_urls: [],
@@ -92,8 +98,10 @@ export function CustomExerciseModal({
       onClose();
     } catch (err) {
       const message =
-        err instanceof Error ? err.message : "Could not save custom exercise.";
-      Alert.alert("Save Failed", message);
+        err instanceof Error
+          ? err.message
+          : dict.customModal.saveFailedBody;
+      Alert.alert(dict.customModal.saveFailedTitle, message);
     } finally {
       setSaving(false);
     }
@@ -121,11 +129,11 @@ export function CustomExerciseModal({
               className="min-h-11 min-w-11 items-center justify-center px-2"
             >
               <Text className="text-text-secondary text-base font-medium">
-                Cancel
+                {dict.common.cancel}
               </Text>
             </Pressable>
             <Text className="text-text-primary text-base font-bold">
-              New Custom Exercise
+              {dict.customModal.title}
             </Text>
             <Pressable
               onPress={handleSave}
@@ -135,7 +143,9 @@ export function CustomExerciseModal({
               {saving ? (
                 <ActivityIndicator size="small" color={Colors.primary} />
               ) : (
-                <Text className="text-primary text-base font-bold">Save</Text>
+                <Text className="text-primary text-base font-bold">
+                  {dict.common.save}
+                </Text>
               )}
             </Pressable>
           </View>
@@ -147,19 +157,19 @@ export function CustomExerciseModal({
           >
             {/* Exercise Name */}
             <Text className="text-text-secondary text-xs font-semibold uppercase tracking-wider mb-2">
-              Exercise Name *
+              {dict.customModal.nameLabel}
             </Text>
             <TextInput
               value={name}
               onChangeText={setName}
-              placeholder="e.g., Cable Bayesian Curl"
+              placeholder={dict.customModal.namePlaceholder}
               placeholderTextColor={Colors.textMuted}
               className="bg-surface border border-border rounded-xl px-4 py-3 text-text-primary text-base mb-4"
             />
 
             {/* Muscle Group Picker */}
             <Text className="text-text-secondary text-xs font-semibold uppercase tracking-wider mb-2">
-              Muscle Group
+              {dict.customModal.muscleLabel}
             </Text>
             <View className="flex-row flex-wrap gap-2 mb-4">
               {MUSCLE_GROUPS.map((group) => {
@@ -179,7 +189,7 @@ export function CustomExerciseModal({
                         selected ? "text-primary" : "text-text-secondary"
                       }`}
                     >
-                      {group}
+                      {tMuscle(group)}
                     </Text>
                   </Pressable>
                 );
@@ -188,24 +198,24 @@ export function CustomExerciseModal({
 
             {/* Equipment */}
             <Text className="text-text-secondary text-xs font-semibold uppercase tracking-wider mb-2">
-              Equipment
+              {dict.customModal.equipmentLabel}
             </Text>
             <TextInput
               value={equipment}
               onChangeText={setEquipment}
-              placeholder="e.g., Barbell, Dumbbell, Cable, Bodyweight"
+              placeholder={dict.customModal.equipmentPlaceholder}
               placeholderTextColor={Colors.textMuted}
               className="bg-surface border border-border rounded-xl px-4 py-3 text-text-primary text-base mb-4"
             />
 
             {/* Instructions */}
             <Text className="text-text-secondary text-xs font-semibold uppercase tracking-wider mb-2">
-              Instructions (one step per line)
+              {dict.customModal.instructionsLabel}
             </Text>
             <TextInput
               value={instructionsText}
               onChangeText={setInstructionsText}
-              placeholder={"Step 1...\nStep 2..."}
+              placeholder={dict.customModal.instructionsPlaceholder}
               placeholderTextColor={Colors.textMuted}
               multiline
               textAlignVertical="top"
@@ -214,24 +224,24 @@ export function CustomExerciseModal({
 
             {/* Personal Form Cue */}
             <Text className="text-text-secondary text-xs font-semibold uppercase tracking-wider mb-2">
-              Personal Form Cue (optional)
+              {dict.customModal.tipsLabel}
             </Text>
             <TextInput
               value={tips}
               onChangeText={setTips}
-              placeholder="e.g., Seat height 4, pause 1s at stretch"
+              placeholder={dict.customModal.tipsPlaceholder}
               placeholderTextColor={Colors.textMuted}
               className="bg-surface border border-border rounded-xl px-4 py-3 text-text-primary text-base mb-4"
             />
 
             {/* Optional Video URL */}
             <Text className="text-text-secondary text-xs font-semibold uppercase tracking-wider mb-2">
-              Form Video URL (optional)
+              {dict.customModal.videoLabel}
             </Text>
             <TextInput
               value={videoUrl}
               onChangeText={setVideoUrl}
-              placeholder="https://youtube.com/..."
+              placeholder={dict.customModal.videoPlaceholder}
               placeholderTextColor={Colors.textMuted}
               autoCapitalize="none"
               autoCorrect={false}
@@ -247,7 +257,7 @@ export function CustomExerciseModal({
             >
               <Ionicons name="checkmark-circle" size={20} color="#000000" />
               <Text className="text-black text-base font-extrabold">
-                {saving ? "Saving..." : "Save Custom Exercise"}
+                {saving ? dict.common.saving : dict.customModal.saveBtn}
               </Text>
             </Pressable>
           </ScrollView>

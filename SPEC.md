@@ -34,6 +34,7 @@ A fast, ultra-lightweight personal cross-platform mobile app (iOS & Android) for
 - **Database:** `@supabase/supabase-js` (Supabase Free Tier PostgreSQL)
 - **Media Caching:** `expo-image` (native animated GIF playback + automatic disk caching)
 - **Vector Graphics:** `react-native-svg` (interactive Front & Back anatomical muscle heatmap)
+- **Localization (i18n):** `expo-localization` + typed `src/i18n/` (`en` / `vi` UI, `EN | VI` header toggle, Vietnamese YouTube search & cached instruction translation while keeping exercise names in English)
 - **Local Storage / Offline Queue:** `@react-native-async-storage/async-storage`
 - **Icons:** `@expo/vector-icons` (`Ionicons`)
 - **Seeding Tooling (devDependencies only — excluded from app bundle):** `tsx`, `dotenv`
@@ -43,7 +44,7 @@ A fast, ultra-lightweight personal cross-platform mobile app (iOS & Android) for
 ```bash
 npx create-expo-app@latest gym-tracker
 cd gym-tracker
-npx expo install @supabase/supabase-js @react-native-async-storage/async-storage expo-image @expo/vector-icons react-native-svg
+npx expo install @supabase/supabase-js @react-native-async-storage/async-storage expo-image @expo/vector-icons react-native-svg expo-localization
 npm install uniwind tailwindcss
 npm install -D tsx dotenv
 ```
@@ -72,20 +73,28 @@ gym-tracker/
 ├── supabase/
 │   └── schema.sql                # Authoritative Postgres schema & 7-day split skeleton
 ├── scripts/
-│   └── seedExercises.ts          # Verified dataset ingester (ExerciseDB + FreeExerciseDB + Wger video match)
+│   ├── seedExercises.ts          # Verified dataset ingester (ExerciseDB + FreeExerciseDB + Wger video match)
+│   └── translateExercisesVi.ts   # Resumable EN->VI backfill for exercises.instructions_vi in Supabase
 └── src/
     ├── global.css                # Tailwind v4 + Uniwind entry & @theme OLED Neon-Lime color tokens
     ├── uniwind-types.d.ts        # Auto-generated Uniwind TypeScript definitions (via Metro)
     ├── constants/
     │   └── theme.ts              # Raw color constants, touch targets, and cross-platform shadows
+    ├── i18n/
+    │   ├── en.ts                 # Master English translation dictionary & TranslationSchema
+    │   ├── vi.ts                 # Vietnamese gym translation dictionary
+    │   └── LanguageContext.tsx   # Locale provider (expo-localization + AsyncStorage + tMuscle/tEquipment)
     ├── types/
     │   └── database.ts           # Strict TypeScript interfaces matching Supabase tables
     ├── lib/
     │   ├── supabase.ts           # Supabase client configured with AsyncStorage
     │   ├── offlineQueue.ts       # AsyncStorage cache, client UUIDs & failed-write retry queue
-    │   ├── api.ts                # All Supabase CRUD queries + previous-session lookup + stats
+    │   ├── api.ts                # All Supabase CRUD queries + programs/rolling queues + PR stats
+    │   ├── programTemplates.ts   # Verified starter split presets & short-label helper
     │   └── smartCoach.ts         # Smart Trainer overload math, 30-day muscle analytics & swap ranker
     ├── components/
+    │   ├── LanguageToggle.tsx    # Compact EN | VI pill toggle in top headers
+    │   ├── ProgramManagerModal.tsx   # Switch/create Rolling & Weekly programs & starter presets
     │   ├── RestTimerBar.tsx      # Floating countdown capsule (-15s, +15s, Skip, Vibration on 0)
     │   ├── SetRow.tsx            # Circular set badge, previous ghost value, kg/reps inputs, checkmark
     │   ├── MuscleBodyMap.tsx     # Interactive Front & Back SVG anatomical muscle heatmap
@@ -123,6 +132,7 @@ CREATE TABLE IF NOT EXISTS exercises (
   secondary_muscles TEXT[] NOT NULL DEFAULT '{}',
   equipment TEXT NOT NULL DEFAULT 'Bodyweight',
   instructions TEXT[] NOT NULL DEFAULT '{}',
+  instructions_vi TEXT[] NOT NULL DEFAULT '{}',
   tips TEXT,                                      -- Optional personal user form cue
   gif_url TEXT,                                   -- Verified looping GIF from ExerciseDB CDN
   image_urls TEXT[] NOT NULL DEFAULT '{}',        -- Verified posture frames from Free Exercise DB
@@ -131,22 +141,40 @@ CREATE TABLE IF NOT EXISTS exercises (
 );
 
 -- ============================================================
--- 2. WORKOUT PLANS (1 = Monday ... 7 = Sunday)
+-- 2. WORKOUT PROGRAMS (Rolling Queue or Fixed Mon-Sun Weekly Splits)
 -- ============================================================
-CREATE TABLE IF NOT EXISTS workout_plans (
+CREATE TABLE IF NOT EXISTS workout_programs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  day_of_week INT NOT NULL UNIQUE CHECK (day_of_week BETWEEN 1 AND 7),
   name TEXT NOT NULL,
-  is_rest_day BOOLEAN DEFAULT false,
-  notes TEXT
+  description TEXT,
+  schedule_mode TEXT NOT NULL DEFAULT 'rolling' CHECK (schedule_mode IN ('rolling', 'weekly')),
+  is_active BOOLEAN NOT NULL DEFAULT false,
+  next_routine_id UUID,
+  schedule_state JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- ============================================================
--- 3. PLAN EXERCISES (Ordered exercises assigned to each day)
+-- 3. PROGRAM ROUTINES (Ordered routines inside a program)
 -- ============================================================
-CREATE TABLE IF NOT EXISTS plan_exercises (
+CREATE TABLE IF NOT EXISTS program_routines (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  plan_id UUID NOT NULL REFERENCES workout_plans(id) ON DELETE CASCADE,
+  program_id UUID NOT NULL REFERENCES workout_programs(id) ON DELETE CASCADE,
+  order_index INT NOT NULL DEFAULT 0,
+  day_of_week INT CHECK (day_of_week BETWEEN 1 AND 7),
+  short_label TEXT,
+  name TEXT NOT NULL,
+  is_rest_day BOOLEAN NOT NULL DEFAULT false,
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ============================================================
+-- 4. ROUTINE EXERCISES (Ordered exercises assigned to each routine)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS routine_exercises (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  routine_id UUID NOT NULL REFERENCES program_routines(id) ON DELETE CASCADE,
   exercise_id UUID NOT NULL REFERENCES exercises(id) ON DELETE CASCADE,
   order_index INT NOT NULL DEFAULT 0,
   target_sets INT NOT NULL DEFAULT 3,
@@ -155,11 +183,12 @@ CREATE TABLE IF NOT EXISTS plan_exercises (
 );
 
 -- ============================================================
--- 4. WORKOUT SESSIONS (Individual gym visits)
+-- 5. WORKOUT SESSIONS (Individual gym visits)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS workout_sessions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  plan_id UUID REFERENCES workout_plans(id) ON DELETE SET NULL,
+  plan_id UUID,
+  routine_id UUID REFERENCES program_routines(id) ON DELETE SET NULL,
   plan_name_snapshot TEXT NOT NULL,
   session_date DATE NOT NULL DEFAULT CURRENT_DATE,
   started_at TIMESTAMPTZ DEFAULT now(),
@@ -266,6 +295,10 @@ Map incoming API body parts/muscles cleanly into 8 buckets:
 
 - Always upsert using `{ onConflict: 'external_id' }` so re-running the script updates records cleanly without creating duplicates or wiping user-saved `video_url` / `tips`.
 
+### Vietnamese Instruction Backfill (`scripts/translateExercisesVi.ts`)
+
+- Run `npx tsx scripts/translateExercisesVi.ts` (resumable; pass `--force` to overwrite existing rows) to batch-translate `exercises.instructions[]` into `exercises.instructions_vi[]` directly in Supabase.
+
 ---
 
 ## 6. TypeScript Data Models (`types/database.ts`)
@@ -293,6 +326,7 @@ export interface Exercise {
   secondary_muscles: string[];
   equipment: string;
   instructions: string[];
+  instructions_vi: string[];
   tips: string | null;
   gif_url: string | null;
   image_urls: string[];
@@ -300,9 +334,40 @@ export interface Exercise {
   created_at?: string;
 }
 
+export type ScheduleMode = "rolling" | "weekly";
+
+export interface ProgramScheduleAnchor {
+  date: string;
+  routineId: string;
+}
+
+export type ProgramDateOverride =
+  | { kind: "single"; routineId: string | "REST" }
+  | { kind: "rest_push" };
+
+export interface ProgramScheduleState {
+  anchors?: ProgramScheduleAnchor[];
+  overrides?: Record<string, ProgramDateOverride>;
+}
+
+export interface WorkoutProgram {
+  id: string;
+  name: string;
+  description: string | null;
+  schedule_mode: ScheduleMode;
+  is_active: boolean;
+  next_routine_id: string | null;
+  schedule_state?: ProgramScheduleState | null;
+  created_at?: string;
+  workout_plans?: WorkoutPlan[];
+}
+
 export interface WorkoutPlan {
   id: string;
-  day_of_week: number; // 1 (Mon) to 7 (Sun)
+  program_id: string;
+  order_index: number;
+  day_of_week: number | null;
+  short_label: string | null;
   name: string;
   is_rest_day: boolean;
   notes: string | null;
@@ -312,6 +377,7 @@ export interface WorkoutPlan {
 export interface PlanExercise {
   id: string;
   plan_id: string;
+  routine_id?: string;
   exercise_id: string;
   order_index: number;
   target_sets: number;
@@ -326,6 +392,7 @@ export interface PlanExerciseWithDetails extends PlanExercise {
 export interface WorkoutSession {
   id: string;
   plan_id: string | null;
+  routine_id?: string | null;
   plan_name_snapshot: string;
   session_date: string; // YYYY-MM-DD
   started_at: string;
@@ -450,8 +517,9 @@ Create the Supabase client using `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUP
 ### Tab 1: Today's Active Workout Logger (`src/app/(tabs)/index.tsx`)
 
 - **Editorial Top Bar:**
-  - Neon-lime eyebrow (`MONDAY • N EXERCISES`), live elapsed workout timer pill once a session is active, and large bold split name.
-  - Circular neon-lime 7-day selector (`M T W T F S S`) defaulting to today (ISO weekday `1..7`), allowing quick switching if a gym day shifts.
+  - Interactive Active Program pill opening `ProgramManagerModal` (`Rolling Queue` / `Fixed Weekdays` + saved/preset/custom programs).
+  - Neon-lime eyebrow (`ROLLING QUEUE • N EXERCISES` or `MONDAY • N EXERCISES`), live elapsed workout timer pill once a session is active, and large bold routine name.
+  - **Date-Aware 7-Day Week Strip + 1-Tap Routine Assigner:** Interactive `< Mon..Sun >` calendar showing each date's day number and scheduled routine tag underneath (`PUSH`, `PULL`, `LEGS H`, `UPPER`, `LEGS L`, `Rest`). Tap any date (e.g., tomorrow Friday) and pick any routine chip (`+ Rest`) with **`Shift next days`** (anchors rolling cycle from that date forward so Sat/Sun/Mon shift automatically) or **`This day only`** (single-date override persisted in `workout_programs.schedule_state`).
   - Conditional **Offline Sync Pill** showing pending queued count (tappable to flush immediately).
   - `"Finish"` primary pill (enabled once at least 1 set is completed) opening a cross-platform completion modal for optional session notes and marking `completed_at`.
 - **Rest Day Empty State:**
@@ -474,11 +542,12 @@ Create the Supabase client using `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUP
   - Displays countdown (`MM:SS`), linear progress bar, `"-15s"`, `"+15s"`, and `"Skip"` buttons.
   - Triggers `Vibration.vibrate(...)` at `00:00` (using `Platform.OS` to handle iOS vs. Android pattern array differences cleanly; note that simulators/emulators do not physically vibrate) and auto-dismisses after 2 seconds.
 
-### Tab 2: Weekly Split Plan Builder (`src/app/(tabs)/plan.tsx`)
+### Tab 2: Program & Split Plan Builder (`src/app/(tabs)/plan.tsx`)
 
-- **Day Tabs:** Circular neon-lime `M`–`S` selector bar with dot indicators.
+- **Program Bar & Mode Switcher:** Displays active program name, `"Programs"` button opening `ProgramManagerModal`, and a `Rolling Queue` | `Fixed Weekdays` segmented toggle.
+- **Slot / Day Tabs:** Horizontal numbered routine chips (`+ Add` slot supported) in `rolling` mode, or circular neon-lime `M`–`S` selector in `weekly` mode.
 - **Routine Details Card:**
-  - Routine Name `TextInput`, `"Rest Day"` `Switch`, Day Notes `TextInput`, and `"Save Day Settings"` button with saved confirmation feedback.
+  - Routine Name `TextInput`, Short Tag (`short_label`) `TextInput`, `"Rest Day"` `Switch`, Day Notes `TextInput`, `"Save Day Settings"` button, plus `"Set as Up Next in Queue"` & `"Delete Routine"` in `rolling` mode.
 - **Exercise List (when not a rest day):**
   - Each card shows `expo-image` thumbnail, Exercise order & Name, Muscle/Equipment subtitle, Up/Down reorder buttons (`↑` / `↓`), Remove Trash icon, and 3 compact inline editors:
     - `Sets` (`number-pad`)
@@ -507,9 +576,9 @@ Presented as a native modal screen (`presentation: 'modal'` in `app/_layout.tsx`
 2. **HD Form Video Bar:**
    - If `exercise.video_url` exists: Primary button `"Watch Verified Form Video"` (opens via `Linking.openURL`) + small `"Edit Link"` icon.
    - If no `video_url`: Button `"+ Attach Form Video URL"` (opens inline text input to paste & save a trusted YouTube URL to Supabase).
-   - Always includes secondary button `"Search Form Tutorial on YouTube"` opening `https://www.youtube.com/results?search_query=${encodeURIComponent(exercise.name + ' proper form tutorial')}`.
+   - Always includes secondary button `"Search Form Tutorial on YouTube"` opening `https://www.youtube.com/results?search_query=${encodeURIComponent(locale === 'vi' ? `hướng dẫn tập ${exercise.name} đúng kỹ thuật` : `${exercise.name} proper form tutorial`)}`.
 3. **Muscle Breakdown:** Badges for `muscle_group`, `equipment`, `target_muscles`, and `secondary_muscles`.
-4. **Verified Step-by-Step Instructions:** Numbered step cards rendered from `exercise.instructions[]`.
+4. **Verified Step-by-Step Instructions:** Numbered step cards rendered directly from `exercise.instructions_vi[]` in `vi` mode (with an instant `EN`/`VI` toggle) and `exercise.instructions[]` in `en` mode.
 5. **Personal Form Cue (`tips`):** Editable amber callout card so you can save your own bench notch or grip reminder per exercise.
 6. **Personal Records & Recent Sets:**
    - Two metric boxes: **Heaviest Weight (`kg`)** and **Est. 1RM (`kg`)**.

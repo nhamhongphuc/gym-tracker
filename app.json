@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "gym-tracker",
+    "name": "Gym Tracker",
     "slug": "gym-tracker",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -9,7 +9,8 @@
     "userInterfaceStyle": "dark",
     "ios": {
       "icon": "./assets/expo.icon",
-      "bundleIdentifier": "com.personal.gymtracker"
+      "bundleIdentifier": "com.hongphuc.gymtracker",
+      "appleTeamId": "M4LP82NPDV"
     },
     "android": {
       "adaptiveIcon": {
@@ -31,12 +32,18 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#208AEF",
+          "backgroundColor": "#000000",
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 76
         }
       ],
-      "expo-image"
+      "expo-image",
+      [
+        "expo-localization",
+        {
+          "supportedLocales": ["en", "vi"]
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

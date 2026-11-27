@@ -1,6 +1,7 @@
 import { Pressable, Text, View } from "react-native";
 import Svg, { Circle, G, Path, Rect } from "react-native-svg";
 import { Colors } from "@/constants/theme";
+import { useI18n } from "@/i18n/LanguageContext";
 import type { MuscleGroupSummary } from "@/lib/smartCoach";
 
 interface MuscleBodyMapProps {
@@ -14,6 +15,8 @@ export function MuscleBodyMap({
   selectedMuscle,
   onSelectMuscle,
 }: MuscleBodyMapProps) {
+  const { dict } = useI18n();
+
   function getStyleProps(group: string) {
     const summary = summaries[group];
     const worked = (summary?.setsCount ?? 0) > 0;
@@ -39,12 +42,12 @@ export function MuscleBodyMap({
   return (
     <View className="rounded-2xl bg-surface border border-border p-4 gap-3">
       <View className="flex-row items-center justify-between">
-        <View>
+        <View className="flex-1 pr-2">
           <Text className="text-text-primary text-base font-bold">
-            Anatomical Heatmap
+            {dict.bodyMap.title}
           </Text>
           <Text className="text-text-secondary text-xs">
-            Tap any muscle group to filter exercises &amp; recovery
+            {dict.bodyMap.subtitle}
           </Text>
         </View>
         {selectedMuscle && (
@@ -52,7 +55,9 @@ export function MuscleBodyMap({
             onPress={() => onSelectMuscle(null)}
             className="min-h-9 px-3 rounded-full bg-surface-elevated border border-border items-center justify-center"
           >
-            <Text className="text-primary text-xs font-bold">Show All</Text>
+            <Text className="text-primary text-xs font-bold">
+              {dict.bodyMap.showAll}
+            </Text>
           </Pressable>
         )}
       </View>
@@ -61,7 +66,6 @@ export function MuscleBodyMap({
         {/* FRONT VIEW */}
         <View className="items-center gap-1.5">
           <Svg width={132} height={264} viewBox="0 0 140 280">
-            {/* Head & Neck */}
             <Circle
               cx={70}
               cy={24}
@@ -81,7 +85,6 @@ export function MuscleBodyMap({
               strokeWidth={1}
             />
 
-            {/* Shoulders (Front Delts) */}
             <G onPress={() => toggleGroup("Shoulders")}>
               <Path
                 d="M46 50 C34 50 28 58 28 70 L39 73 L45 58 Z"
@@ -93,7 +96,6 @@ export function MuscleBodyMap({
               />
             </G>
 
-            {/* Chest (Pectorals) */}
             <G onPress={() => toggleGroup("Chest")}>
               <Path
                 d="M45 50 L69 52 L69 78 C58 80 46 77 43 68 Z"
@@ -105,7 +107,6 @@ export function MuscleBodyMap({
               />
             </G>
 
-            {/* Arms (Biceps & Forearms) */}
             <G onPress={() => toggleGroup("Arms")}>
               <Path
                 d="M27 72 L39 74 L36 105 L24 103 Z"
@@ -125,7 +126,6 @@ export function MuscleBodyMap({
               />
             </G>
 
-            {/* Core (Abs & Obliques) */}
             <G onPress={() => toggleGroup("Core")}>
               <Rect
                 x={54}
@@ -175,7 +175,6 @@ export function MuscleBodyMap({
                 rx={3}
                 {...getStyleProps("Core")}
               />
-              {/* Obliques */}
               <Path
                 d="M44 76 L52 82 L52 128 L44 122 Z"
                 {...getStyleProps("Core")}
@@ -186,7 +185,6 @@ export function MuscleBodyMap({
               />
             </G>
 
-            {/* Pelvis Base */}
             <Path
               d="M45 134 L95 134 L91 150 L74 153 L70 147 L66 153 L49 150 Z"
               fill="#1C1C22"
@@ -194,7 +192,6 @@ export function MuscleBodyMap({
               strokeWidth={1}
             />
 
-            {/* Legs (Quads & Calves) */}
             <G onPress={() => toggleGroup("Legs")}>
               <Path
                 d="M46 152 L67 154 L64 205 L44 205 Z"
@@ -215,14 +212,13 @@ export function MuscleBodyMap({
             </G>
           </Svg>
           <Text className="text-text-secondary text-[11px] font-bold uppercase tracking-wider">
-            Front
+            {dict.bodyMap.front}
           </Text>
         </View>
 
         {/* BACK VIEW */}
         <View className="items-center gap-1.5">
           <Svg width={132} height={264} viewBox="0 0 140 280">
-            {/* Head & Neck */}
             <Circle
               cx={70}
               cy={24}
@@ -242,7 +238,6 @@ export function MuscleBodyMap({
               strokeWidth={1}
             />
 
-            {/* Rear Shoulders */}
             <G onPress={() => toggleGroup("Shoulders")}>
               <Path
                 d="M46 50 C34 50 28 58 28 70 L39 73 L45 58 Z"
@@ -254,14 +249,11 @@ export function MuscleBodyMap({
               />
             </G>
 
-            {/* Back (Traps, Lats, Lower Back) */}
             <G onPress={() => toggleGroup("Back")}>
-              {/* Traps */}
               <Path
                 d="M54 46 L70 43 L86 46 L92 59 L70 72 L48 59 Z"
                 {...getStyleProps("Back")}
               />
-              {/* Left & Right Lats */}
               <Path
                 d="M44 62 L68 74 L68 112 L50 108 L42 82 Z"
                 {...getStyleProps("Back")}
@@ -270,14 +262,12 @@ export function MuscleBodyMap({
                 d="M96 62 L72 74 L72 112 L90 108 L98 82 Z"
                 {...getStyleProps("Back")}
               />
-              {/* Lower Back */}
               <Path
                 d="M52 112 L88 112 L86 134 L54 134 Z"
                 {...getStyleProps("Back")}
               />
             </G>
 
-            {/* Arms (Triceps & Forearms) */}
             <G onPress={() => toggleGroup("Arms")}>
               <Path
                 d="M27 72 L39 74 L36 105 L24 103 Z"
@@ -297,9 +287,7 @@ export function MuscleBodyMap({
               />
             </G>
 
-            {/* Legs (Glutes, Hamstrings, Calves) */}
             <G onPress={() => toggleGroup("Legs")}>
-              {/* Glutes */}
               <Path
                 d="M48 136 L69 136 L68 158 C56 160 46 154 46 144 Z"
                 {...getStyleProps("Legs")}
@@ -308,7 +296,6 @@ export function MuscleBodyMap({
                 d="M92 136 L71 136 L72 158 C84 160 94 154 94 144 Z"
                 {...getStyleProps("Legs")}
               />
-              {/* Hamstrings */}
               <Path
                 d="M46 160 L67 160 L64 205 L44 205 Z"
                 {...getStyleProps("Legs")}
@@ -317,7 +304,6 @@ export function MuscleBodyMap({
                 d="M94 160 L73 160 L76 205 L96 205 Z"
                 {...getStyleProps("Legs")}
               />
-              {/* Calves */}
               <Path
                 d="M45 210 L62 210 L59 262 L46 262 Z"
                 {...getStyleProps("Legs")}
@@ -329,7 +315,7 @@ export function MuscleBodyMap({
             </G>
           </Svg>
           <Text className="text-text-secondary text-[11px] font-bold uppercase tracking-wider">
-            Back
+            {dict.bodyMap.back}
           </Text>
         </View>
       </View>
@@ -338,15 +324,21 @@ export function MuscleBodyMap({
       <View className="flex-row items-center justify-center gap-5 pt-1 border-t border-border">
         <View className="flex-row items-center gap-1.5">
           <View className="w-3 h-3 rounded-sm bg-surface-elevated border border-border" />
-          <Text className="text-text-secondary text-[11px]">Untrained</Text>
+          <Text className="text-text-secondary text-[11px]">
+            {dict.bodyMap.untrained}
+          </Text>
         </View>
         <View className="flex-row items-center gap-1.5">
           <View className="w-3 h-3 rounded-sm bg-primary/40 border border-primary" />
-          <Text className="text-text-secondary text-[11px]">Light Volume</Text>
+          <Text className="text-text-secondary text-[11px]">
+            {dict.bodyMap.lightVolume}
+          </Text>
         </View>
         <View className="flex-row items-center gap-1.5">
           <View className="w-3 h-3 rounded-sm bg-primary" />
-          <Text className="text-text-secondary text-[11px]">High Focus</Text>
+          <Text className="text-text-secondary text-[11px]">
+            {dict.bodyMap.highFocus}
+          </Text>
         </View>
       </View>
     </View>

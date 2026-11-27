@@ -1,6 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Pressable, Text, View } from "react-native";
 import { Colors, Shadows } from "@/constants/theme";
+import { useI18n } from "@/i18n/LanguageContext";
 
 interface RestTimerBarProps {
   remainingSeconds: number;
@@ -24,6 +25,7 @@ export function RestTimerBar({
   onAdjust,
   onSkip,
 }: RestTimerBarProps) {
+  const { dict } = useI18n();
   const progress =
     totalSeconds > 0
       ? Math.min(1, Math.max(0, remainingSeconds / totalSeconds))
@@ -57,7 +59,7 @@ export function RestTimerBar({
                 isDone ? "text-primary" : "text-text-primary"
               }`}
             >
-              {isDone ? "Rest Complete!" : formatTime(remainingSeconds)}
+              {isDone ? dict.restTimer.complete : formatTime(remainingSeconds)}
             </Text>
           </View>
           {!!exerciseName && (
@@ -84,7 +86,9 @@ export function RestTimerBar({
             onPress={onSkip}
             className="min-h-11 min-w-11 px-3.5 rounded-xl bg-primary items-center justify-center"
           >
-            <Text className="text-black text-xs font-extrabold">Skip</Text>
+            <Text className="text-black text-xs font-extrabold">
+              {dict.restTimer.skip}
+            </Text>
           </Pressable>
         </View>
       </View>

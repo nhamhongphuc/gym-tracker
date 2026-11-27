@@ -13,6 +13,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Colors, Shadows } from "@/constants/theme";
+import { formatTemplate, useI18n } from "@/i18n/LanguageContext";
 import { fetchExercises } from "@/lib/api";
 import type { Exercise } from "@/types/database";
 
@@ -50,6 +51,7 @@ export function ExercisePickerModal({
   onSelect,
   existingExerciseIds,
 }: ExercisePickerModalProps) {
+  const { dict, tMuscle, tEquipment } = useI18n();
   const [exercises, setExercises] = useState<Exercise[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -71,7 +73,7 @@ export function ExercisePickerModal({
       } catch (err) {
         if (active) {
           setError(
-            err instanceof Error ? err.message : "Failed to load exercises."
+            err instanceof Error ? err.message : dict.exercises.loadError
           );
         }
       } finally {
@@ -83,7 +85,7 @@ export function ExercisePickerModal({
     return () => {
       active = false;
     };
-  }, [visible, exercises.length]);
+  }, [visible, exercises.length, dict.exercises.loadError]);
 
   const filteredExercises = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -133,13 +135,15 @@ export function ExercisePickerModal({
         {/* Header */}
         <View className="flex-row items-center justify-between px-4 py-3 bg-surface border-b border-border">
           <Text className="text-text-primary text-base font-extrabold">
-            Add Exercise to Split
+            {dict.pickerModal.title}
           </Text>
           <Pressable
             onPress={onClose}
             className="min-h-11 min-w-11 items-center justify-center px-2"
           >
-            <Text className="text-primary text-base font-bold">Done</Text>
+            <Text className="text-primary text-base font-bold">
+              {dict.common.done}
+            </Text>
           </Pressable>
         </View>
 
@@ -150,7 +154,7 @@ export function ExercisePickerModal({
             <TextInput
               value={search}
               onChangeText={setSearch}
-              placeholder="Search exercises..."
+              placeholder={dict.pickerModal.searchPlaceholder}
               placeholderTextColor={Colors.textMuted}
               autoCorrect={false}
               className="flex-1 text-text-primary text-sm py-2"
@@ -191,7 +195,7 @@ export function ExercisePickerModal({
                       active ? "text-black" : "text-text-secondary"
                     }`}
                   >
-                    {muscle}
+                    {tMuscle(muscle)}
                   </Text>
                 </Pressable>
               );
@@ -205,7 +209,6 @@ export function ExercisePickerModal({
           >
             {EQUIPMENT_FILTERS.map((eq) => {
               const active = selectedEquipment === eq;
-              const label = eq === "Body" ? "Bodyweight" : eq;
               return (
                 <Pressable
                   key={eq}
@@ -221,7 +224,7 @@ export function ExercisePickerModal({
                       active ? "text-accent" : "text-text-secondary"
                     }`}
                   >
-                    {eq === "All" ? "All Equipment" : label}
+                    {tEquipment(eq)}
                   </Text>
                 </Pressable>
               );
@@ -234,7 +237,7 @@ export function ExercisePickerModal({
           <View className="flex-1 items-center justify-center gap-3">
             <ActivityIndicator size="large" color={Colors.primary} />
             <Text className="text-text-secondary text-sm">
-              Loading exercise library...
+              {dict.pickerModal.loading}
             </Text>
           </View>
         ) : error ? (
@@ -293,14 +296,14 @@ export function ExercisePickerModal({
                     <View className="flex-row items-center gap-2 mt-1">
                       <View className="px-2 py-0.5 rounded-md bg-primary-subtle">
                         <Text className="text-primary text-xs font-bold">
-                          {item.muscle_group}
+                          {tMuscle(item.muscle_group)}
                         </Text>
                       </View>
                       <Text
                         numberOfLines={1}
                         className="text-text-secondary text-xs flex-1"
                       >
-                        {item.equipment}
+                        {tEquipment(item.equipment)}
                       </Text>
                     </View>
                   </View>
@@ -324,14 +327,14 @@ export function ExercisePickerModal({
                           color={Colors.primary}
                         />
                         <Text className="text-primary text-xs font-bold">
-                          Added
+                          {dict.pickerModal.added}
                         </Text>
                       </>
                     ) : (
                       <>
                         <Ionicons name="add" size={16} color="#000000" />
                         <Text className="text-black text-xs font-extrabold">
-                          Add
+                          {dict.pickerModal.add}
                         </Text>
                       </>
                     )}
@@ -342,9 +345,13 @@ export function ExercisePickerModal({
             ListEmptyComponent={
               <View className="items-center justify-center py-14 px-6">
                 <Text className="text-text-secondary text-sm text-center">
-                  No exercises match &ldquo;
-                  {search || `${selectedMuscle} / ${selectedEquipment}`}
-                  &rdquo;.
+                  {formatTemplate(dict.pickerModal.emptyMatch, {
+                    query:
+                      search ||
+                      `${tMuscle(selectedMuscle)} / ${tEquipment(
+                        selectedEquipment
+                      )}`,
+                  })}
                 </Text>
               </View>
             }

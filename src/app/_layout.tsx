@@ -2,8 +2,11 @@ import "../global.css";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { Colors } from "@/constants/theme";
+import { LanguageProvider, useI18n } from "@/i18n/LanguageContext";
 
-export default function RootLayout() {
+function RootNavigator() {
+  const { dict } = useI18n();
+
   return (
     <>
       <StatusBar style="light" />
@@ -20,10 +23,18 @@ export default function RootLayout() {
           name="exercise/[id]"
           options={{
             presentation: "modal",
-            title: "Exercise Details",
+            title: dict.exerciseDetail.defaultTitle,
           }}
         />
       </Stack>
     </>
+  );
+}
+
+export default function RootLayout() {
+  return (
+    <LanguageProvider>
+      <RootNavigator />
+    </LanguageProvider>
   );
 }

@@ -1,3 +1,6 @@
+import { en } from "@/i18n/en";
+import { formatTemplate, type Locale } from "@/i18n/LanguageContext";
+import { vi } from "@/i18n/vi";
 import type {
   Exercise,
   PlanExerciseWithDetails,
@@ -39,7 +42,6 @@ function parseTargetRepRange(targetReps: string): {
   maxReps: number;
 } | null {
   const trimmed = targetReps.trim().toLowerCase();
-  // Skip time-based targets like "15-20 min" or "60s"
   if (/[a-z]/.test(trimmed)) return null;
 
   const rangeMatch = trimmed.match(/^(\d+)\s*[-–]\s*(\d+)$/);
@@ -74,7 +76,8 @@ function roundWeightIncrement(
  */
 export function computeSmartSuggestion(
   pe: PlanExerciseWithDetails,
-  previousLogs: SetLog[]
+  previousLogs: SetLog[],
+  locale: Locale = "en"
 ): SmartSuggestion | null {
   if (previousLogs.length === 0) return null;
 
@@ -93,6 +96,8 @@ export function computeSmartSuggestion(
     sample.reduce((sum, s) => sum + s.reps, 0) / Math.max(1, sample.length);
   const allHitTop = sample.every((s) => s.reps >= repRange.maxReps);
 
+  const coach = locale === "vi" ? vi.smartCoach : en.smartCoach;
+
   if (allHitTop) {
     if (maxWeight > 0) {
       const { nextWeight, increment } = roundWeightIncrement(
@@ -103,8 +108,11 @@ export function computeSmartSuggestion(
         suggestedWeightKg: nextWeight,
         suggestedReps: repRange.minReps,
         badge: `↑ +${increment}kg`,
-        headline: `Try ${nextWeight}kg × ${repRange.minReps}`,
-        reason: `Hit ${repRange.maxReps}+ reps across all sets last time`,
+        headline: formatTemplate(coach.tryWeight, {
+          weight: nextWeight,
+          reps: repRange.minReps,
+        }),
+        reason: formatTemplate(coach.reasonHitTop, { max: repRange.maxReps }),
         isUpgrade: true,
       };
     }
@@ -113,9 +121,9 @@ export function computeSmartSuggestion(
     return {
       suggestedWeightKg: 0,
       suggestedReps: nextReps,
-      badge: "↑ +2 reps",
-      headline: `Try ${nextReps} reps`,
-      reason: `Mastered ${repRange.maxReps} reps across all sets last time`,
+      badge: `↑ ${formatTemplate(coach.badgeReps, { inc: 2 })}`,
+      headline: formatTemplate(coach.tryReps, { reps: nextReps }),
+      reason: formatTemplate(coach.reasonMastered, { max: repRange.maxReps }),
       isUpgrade: true,
     };
   }
@@ -125,12 +133,15 @@ export function computeSmartSuggestion(
     return {
       suggestedWeightKg: maxWeight,
       suggestedReps: nextReps,
-      badge: "↑ +1 rep",
+      badge: `↑ ${coach.badgeRep}`,
       headline:
         maxWeight > 0
-          ? `Aim for ${maxWeight}kg × ${nextReps}`
-          : `Aim for ${nextReps} reps`,
-      reason: "Build reps toward the top of your target range",
+          ? formatTemplate(coach.aimWeight, {
+              weight: maxWeight,
+              reps: nextReps,
+            })
+          : formatTemplate(coach.aimReps, { reps: nextReps }),
+      reason: coach.reasonBuildReps,
       isUpgrade: true,
     };
   }
@@ -138,12 +149,15 @@ export function computeSmartSuggestion(
   return {
     suggestedWeightKg: maxWeight,
     suggestedReps: repRange.minReps,
-    badge: "Hold weight",
+    badge: coach.badgeHold,
     headline:
       maxWeight > 0
-        ? `Hold ${maxWeight}kg × ${repRange.minReps}`
-        : `Aim for ${repRange.minReps} clean reps`,
-    reason: "Consolidate form & reps before increasing load",
+        ? formatTemplate(coach.holdWeight, {
+            weight: maxWeight,
+            reps: repRange.minReps,
+          })
+        : formatTemplate(coach.holdReps, { reps: repRange.minReps }),
+    reason: coach.reasonConsolidate,
     isUpgrade: false,
   };
 }
@@ -277,7 +291,6 @@ export function rankSwapAlternatives(
       for (const target of ex.target_muscles) {
         if (currentTargets.has(target.toLowerCase())) score += 3;
       }
-      // Prefer different equipment so the user can move to a free station
       if (ex.equipment.toLowerCase() !== currentEq) score += 2;
       if (ex.gif_url) score += 1;
       return { ex, score };

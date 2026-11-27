@@ -15,6 +15,7 @@ import {
   View,
 } from "react-native";
 import { Colors, Shadows } from "@/constants/theme";
+import { useI18n } from "@/i18n/LanguageContext";
 import {
   fetchExerciseById,
   fetchExercisePRStats,
@@ -22,14 +23,9 @@ import {
 } from "@/lib/api";
 import type { Exercise, ExercisePRStats } from "@/types/database";
 
-const SOURCE_LABELS: Record<Exercise["source_name"], string> = {
-  ExerciseDB: "Source: ExerciseDB (AscendAPI)",
-  FreeExerciseDB: "Source: Free Exercise DB",
-  Custom: "Custom Exercise",
-};
-
 export default function ExerciseDetailModal() {
   const { id } = useLocalSearchParams<{ id: string }>();
+  const { locale, dict, tMuscle, tEquipment } = useI18n();
 
   const [exercise, setExercise] = useState<Exercise | null>(null);
   const [prStats, setPrStats] = useState<ExercisePRStats | null>(null);
@@ -39,6 +35,9 @@ export default function ExerciseDetailModal() {
   // 2-frame image switcher for Free Exercise DB posture photos
   const [frameIndex, setFrameIndex] = useState(0);
   const [autoToggle, setAutoToggle] = useState(true);
+
+  // Toggle between stored Vietnamese instructions and original English steps
+  const [showOriginalSteps, setShowOriginalSteps] = useState(false);
 
   // Inline video_url editor
   const [editingVideo, setEditingVideo] = useState(false);
@@ -56,7 +55,6 @@ export default function ExerciseDetailModal() {
     async function load() {
       if (!id) return;
       try {
-        setError(null);
         const [ex, stats] = await Promise.all([
           fetchExerciseById(id),
           fetchExercisePRStats(id).catch(() => ({
@@ -66,6 +64,7 @@ export default function ExerciseDetailModal() {
           })),
         ]);
         if (!active) return;
+        setError(null);
         setExercise(ex);
         setPrStats(stats);
         setVideoDraft(ex?.video_url ?? "");
@@ -73,7 +72,7 @@ export default function ExerciseDetailModal() {
       } catch (err) {
         if (!active) return;
         setError(
-          err instanceof Error ? err.message : "Failed to load exercise."
+          err instanceof Error ? err.message : dict.exerciseDetail.notFound
         );
       } finally {
         if (active) setLoading(false);
@@ -84,7 +83,7 @@ export default function ExerciseDetailModal() {
     return () => {
       active = false;
     };
-  }, [id]);
+  }, [id, dict.exerciseDetail.notFound]);
 
   // Auto-toggle start/finish posture frames every 1.2s when gif_url is absent
   const imageCount = exercise?.image_urls?.length ?? 0;
@@ -100,12 +99,18 @@ export default function ExerciseDetailModal() {
     try {
       const supported = await Linking.canOpenURL(url);
       if (!supported) {
-        Alert.alert("Invalid URL", "Cannot open this link on your device.");
+        Alert.alert(
+          dict.exerciseDetail.invalidUrlTitle,
+          dict.exerciseDetail.invalidUrlBody
+        );
         return;
       }
       await Linking.openURL(url);
     } catch {
-      Alert.alert("Open Failed", "Could not open the video link.");
+      Alert.alert(
+        dict.exerciseDetail.openFailedTitle,
+        dict.exerciseDetail.openFailedBody
+      );
     }
   }
 
@@ -121,8 +126,8 @@ export default function ExerciseDetailModal() {
       setEditingVideo(false);
     } catch (err) {
       Alert.alert(
-        "Save Failed",
-        err instanceof Error ? err.message : "Could not save video URL."
+        dict.exerciseDetail.saveFailedTitle,
+        err instanceof Error ? err.message : dict.exerciseDetail.saveFailedTitle
       );
     } finally {
       setSavingVideo(false);
@@ -141,8 +146,8 @@ export default function ExerciseDetailModal() {
       setEditingTips(false);
     } catch (err) {
       Alert.alert(
-        "Save Failed",
-        err instanceof Error ? err.message : "Could not save form cue."
+        dict.exerciseDetail.saveFailedTitle,
+        err instanceof Error ? err.message : dict.exerciseDetail.saveFailedTitle
       );
     } finally {
       setSavingTips(false);
@@ -151,15 +156,33 @@ export default function ExerciseDetailModal() {
 
   const youtubeSearchUrl = exercise
     ? `https://www.youtube.com/results?search_query=${encodeURIComponent(
-        `${exercise.name} proper form tutorial`
+        locale === "vi"
+          ? `hướng dẫn tập ${exercise.name} đúng kỹ thuật`
+          : `${exercise.name} proper form tutorial`
       )}`
+    : "";
+
+  const viInstructions = exercise?.instructions_vi ?? [];
+  const hasViInstructions = viInstructions.length > 0;
+  const displayedInstructions =
+    locale === "vi" && !showOriginalSteps && hasViInstructions
+      ? viInstructions
+      : exercise?.instructions ?? [];
+
+  const sourceAttribution = exercise
+    ? exercise.source_name === "ExerciseDB"
+      ? dict.exerciseDetail.sourceExerciseDB
+      : exercise.source_name === "FreeExerciseDB"
+        ? dict.exerciseDetail.sourceFreeExerciseDB
+        : dict.exerciseDetail.sourceCustom
     : "";
 
   return (
     <View className="flex-1 bg-background">
+      {/* Keep exercise name in English per standard Vietnamese gym usage */}
       <Stack.Screen
         options={{
-          title: exercise?.name ?? "Exercise Details",
+          title: exercise?.name ?? dict.exerciseDetail.defaultTitle,
         }}
       />
 
@@ -167,7 +190,7 @@ export default function ExerciseDetailModal() {
         <View className="flex-1 items-center justify-center gap-3">
           <ActivityIndicator size="large" color={Colors.primary} />
           <Text className="text-text-secondary text-sm">
-            Loading exercise details...
+            {dict.exerciseDetail.loading}
           </Text>
         </View>
       ) : error || !exercise ? (
@@ -178,7 +201,7 @@ export default function ExerciseDetailModal() {
             color={Colors.danger}
           />
           <Text className="text-text-primary text-base font-semibold text-center">
-            {error ?? "Exercise not found."}
+            {error ?? dict.exerciseDetail.notFound}
           </Text>
         </View>
       ) : (
@@ -219,8 +242,8 @@ export default function ExerciseDetailModal() {
                     <View className="flex-row items-center justify-between px-3 py-2 bg-surface/90 border-t border-border">
                       <Text className="text-text-secondary text-xs font-medium">
                         {frameIndex === 0
-                          ? "Start Position (1/2)"
-                          : "Finish Position (2/2)"}
+                          ? dict.exerciseDetail.startPos
+                          : dict.exerciseDetail.finishPos}
                       </Text>
                       <Pressable
                         onPress={() => {
@@ -230,7 +253,7 @@ export default function ExerciseDetailModal() {
                         className="min-h-9 px-3 rounded-lg bg-surface-elevated border border-border items-center justify-center"
                       >
                         <Text className="text-text-primary text-xs font-semibold">
-                          Switch Frame
+                          {dict.exerciseDetail.switchFrame}
                         </Text>
                       </Pressable>
                     </View>
@@ -244,7 +267,7 @@ export default function ExerciseDetailModal() {
                     color={Colors.textMuted}
                   />
                   <Text className="text-text-muted text-xs">
-                    No visual demo attached
+                    {dict.exerciseDetail.noVisual}
                   </Text>
                 </View>
               )}
@@ -258,9 +281,9 @@ export default function ExerciseDetailModal() {
                     onPress={() => openExternalUrl(exercise.video_url!)}
                     className="flex-1 min-h-11 px-4 rounded-xl bg-accent flex-row items-center justify-center gap-2"
                   >
-                    <Ionicons name="play-circle" size={20} color="#F9FAFB" />
+                    <Ionicons name="play-circle" size={20} color="#FFFFFF" />
                     <Text className="text-text-primary text-sm font-bold">
-                      Watch Verified Form Video
+                      {dict.exerciseDetail.watchVideo}
                     </Text>
                   </Pressable>
                   <Pressable
@@ -282,7 +305,7 @@ export default function ExerciseDetailModal() {
                   <TextInput
                     value={videoDraft}
                     onChangeText={setVideoDraft}
-                    placeholder="Paste YouTube or verified video URL..."
+                    placeholder={dict.exerciseDetail.videoPlaceholder}
                     placeholderTextColor={Colors.textMuted}
                     autoCapitalize="none"
                     autoCorrect={false}
@@ -295,7 +318,7 @@ export default function ExerciseDetailModal() {
                       className="min-h-10 px-4 rounded-xl bg-surface-elevated items-center justify-center"
                     >
                       <Text className="text-text-secondary text-xs font-semibold">
-                        Cancel
+                        {dict.common.cancel}
                       </Text>
                     </Pressable>
                     <Pressable
@@ -303,8 +326,10 @@ export default function ExerciseDetailModal() {
                       disabled={savingVideo}
                       className="min-h-10 px-4 rounded-xl bg-primary items-center justify-center"
                     >
-                      <Text className="text-background text-xs font-bold">
-                        {savingVideo ? "Saving..." : "Save Link"}
+                      <Text className="text-black text-xs font-extrabold">
+                        {savingVideo
+                          ? dict.common.saving
+                          : dict.exerciseDetail.saveLink}
                       </Text>
                     </Pressable>
                   </View>
@@ -314,9 +339,13 @@ export default function ExerciseDetailModal() {
                   onPress={() => setEditingVideo(true)}
                   className="min-h-11 px-4 rounded-xl bg-surface-elevated border border-border flex-row items-center justify-center gap-2"
                 >
-                  <Ionicons name="add-circle-outline" size={18} color={Colors.accent} />
+                  <Ionicons
+                    name="add-circle-outline"
+                    size={18}
+                    color={Colors.accent}
+                  />
                   <Text className="text-accent text-sm font-semibold">
-                    + Attach Form Video URL
+                    {dict.exerciseDetail.attachVideo}
                   </Text>
                 </Pressable>
               )}
@@ -327,7 +356,7 @@ export default function ExerciseDetailModal() {
               >
                 <Ionicons name="logo-youtube" size={18} color={Colors.danger} />
                 <Text className="text-text-primary text-sm font-medium">
-                  Search Form Tutorial on YouTube
+                  {dict.exerciseDetail.searchYoutube}
                 </Text>
               </Pressable>
             </View>
@@ -335,17 +364,17 @@ export default function ExerciseDetailModal() {
             {/* 3. Muscle Breakdown */}
             <View className="rounded-2xl bg-surface border border-border p-4 gap-3">
               <Text className="text-text-primary text-base font-bold">
-                Muscle &amp; Equipment Breakdown
+                {dict.exerciseDetail.breakdownTitle}
               </Text>
               <View className="flex-row flex-wrap gap-2">
                 <View className="px-3 py-1 rounded-full bg-primary-subtle border border-primary">
                   <Text className="text-primary text-xs font-bold">
-                    {exercise.muscle_group}
+                    {tMuscle(exercise.muscle_group)}
                   </Text>
                 </View>
                 <View className="px-3 py-1 rounded-full bg-surface-elevated border border-border">
                   <Text className="text-text-primary text-xs font-semibold">
-                    {exercise.equipment}
+                    {tEquipment(exercise.equipment)}
                   </Text>
                 </View>
                 {exercise.target_muscles.map((muscle) => (
@@ -354,7 +383,7 @@ export default function ExerciseDetailModal() {
                     className="px-3 py-1 rounded-full bg-accent/15 border border-accent/40"
                   >
                     <Text className="text-accent text-xs font-medium">
-                      Target: {muscle}
+                      {dict.exerciseDetail.targetPrefix}: {muscle}
                     </Text>
                   </View>
                 ))}
@@ -364,7 +393,7 @@ export default function ExerciseDetailModal() {
                     className="px-3 py-1 rounded-full bg-surface-elevated border border-border"
                   >
                     <Text className="text-text-secondary text-xs">
-                      Secondary: {muscle}
+                      {dict.exerciseDetail.secondaryPrefix}: {muscle}
                     </Text>
                   </View>
                 ))}
@@ -375,9 +404,13 @@ export default function ExerciseDetailModal() {
             <View className="rounded-2xl bg-warning/10 border border-warning/40 p-4 gap-2">
               <View className="flex-row items-center justify-between">
                 <View className="flex-row items-center gap-2">
-                  <Ionicons name="bulb-outline" size={18} color={Colors.warning} />
+                  <Ionicons
+                    name="bulb-outline"
+                    size={18}
+                    color={Colors.warning}
+                  />
                   <Text className="text-warning text-sm font-bold">
-                    Personal Form Cue
+                    {dict.exerciseDetail.cueTitle}
                   </Text>
                 </View>
                 {!editingTips && (
@@ -389,7 +422,9 @@ export default function ExerciseDetailModal() {
                     className="min-h-9 px-3 rounded-lg bg-warning/15 items-center justify-center"
                   >
                     <Text className="text-warning text-xs font-semibold">
-                      {exercise.tips ? "Edit" : "+ Add Cue"}
+                      {exercise.tips
+                        ? dict.common.edit
+                        : dict.exerciseDetail.addCue}
                     </Text>
                   </Pressable>
                 )}
@@ -400,7 +435,7 @@ export default function ExerciseDetailModal() {
                   <TextInput
                     value={tipsDraft}
                     onChangeText={setTipsDraft}
-                    placeholder="e.g., Bench notch 3, tuck elbows 45°..."
+                    placeholder={dict.exerciseDetail.cuePlaceholder}
                     placeholderTextColor={Colors.textMuted}
                     multiline
                     className="bg-surface border border-border rounded-xl px-3 py-2.5 text-text-primary text-sm min-h-20"
@@ -411,7 +446,7 @@ export default function ExerciseDetailModal() {
                       className="min-h-10 px-4 rounded-xl bg-surface items-center justify-center"
                     >
                       <Text className="text-text-secondary text-xs font-semibold">
-                        Cancel
+                        {dict.common.cancel}
                       </Text>
                     </Pressable>
                     <Pressable
@@ -419,31 +454,50 @@ export default function ExerciseDetailModal() {
                       disabled={savingTips}
                       className="min-h-10 px-4 rounded-xl bg-warning items-center justify-center"
                     >
-                      <Text className="text-background text-xs font-bold">
-                        {savingTips ? "Saving..." : "Save Cue"}
+                      <Text className="text-black text-xs font-extrabold">
+                        {savingTips
+                          ? dict.common.saving
+                          : dict.exerciseDetail.saveCue}
                       </Text>
                     </Pressable>
                   </View>
                 </View>
               ) : (
                 <Text className="text-text-primary text-sm leading-5">
-                  {exercise.tips ||
-                    "No personal cue saved yet. Tap + Add Cue to save bench notch or grip reminders."}
+                  {exercise.tips || dict.exerciseDetail.noCue}
                 </Text>
               )}
             </View>
 
-            {/* 5. Verified Step-by-Step Instructions */}
+            {/* 5. Verified Step-by-Step Instructions (Stored in Supabase instructions_vi) */}
             <View className="rounded-2xl bg-surface border border-border p-4 gap-3">
-              <Text className="text-text-primary text-base font-bold">
-                Step-by-Step Instructions
-              </Text>
+              <View className="flex-row items-center justify-between gap-2">
+                <Text className="text-text-primary text-base font-bold flex-1">
+                  {dict.exerciseDetail.instructionsTitle}
+                </Text>
+
+                {locale === "vi" &&
+                  hasViInstructions &&
+                  exercise.instructions.length > 0 && (
+                    <Pressable
+                      onPress={() => setShowOriginalSteps((prev) => !prev)}
+                      className="min-h-8 px-2.5 rounded-lg bg-surface-elevated border border-border items-center justify-center"
+                    >
+                      <Text className="text-text-secondary text-[11px] font-bold">
+                        {showOriginalSteps
+                          ? dict.exerciseDetail.showTranslated
+                          : dict.exerciseDetail.showOriginal}
+                      </Text>
+                    </Pressable>
+                  )}
+              </View>
+
               {exercise.instructions.length === 0 ? (
                 <Text className="text-text-secondary text-sm">
-                  No instructions provided for this exercise.
+                  {dict.exerciseDetail.noInstructions}
                 </Text>
               ) : (
-                exercise.instructions.map((step, idx) => (
+                displayedInstructions.map((step, idx) => (
                   <View
                     key={idx}
                     className="flex-row gap-3 p-3 rounded-xl bg-surface-elevated border border-border"
@@ -464,20 +518,28 @@ export default function ExerciseDetailModal() {
             {/* 6. Personal Records & Recent Sets */}
             <View className="rounded-2xl bg-surface border border-border p-4 gap-3">
               <Text className="text-text-primary text-base font-bold">
-                Personal Records &amp; Recent Sets
+                {dict.exerciseDetail.prTitle}
               </Text>
               <View className="flex-row gap-3">
                 <View className="flex-1 rounded-xl bg-surface-elevated border border-border p-3 items-center">
                   <Text className="text-text-secondary text-xs">
-                    Heaviest Weight
+                    {dict.exerciseDetail.heaviestWeight}
                   </Text>
-                  <Text className="text-primary text-xl font-bold mt-1">
+                  <Text
+                    style={{ fontVariant: ["tabular-nums"] }}
+                    className="text-primary text-xl font-bold mt-1"
+                  >
                     {prStats?.maxWeightKg ? `${prStats.maxWeightKg} kg` : "—"}
                   </Text>
                 </View>
                 <View className="flex-1 rounded-xl bg-surface-elevated border border-border p-3 items-center">
-                  <Text className="text-text-secondary text-xs">Est. 1RM</Text>
-                  <Text className="text-accent text-xl font-bold mt-1">
+                  <Text className="text-text-secondary text-xs">
+                    {dict.exerciseDetail.est1RM}
+                  </Text>
+                  <Text
+                    style={{ fontVariant: ["tabular-nums"] }}
+                    className="text-accent text-xl font-bold mt-1"
+                  >
                     {prStats?.bestEstimated1RM
                       ? `${prStats.bestEstimated1RM} kg`
                       : "—"}
@@ -493,7 +555,8 @@ export default function ExerciseDetailModal() {
                       className="rounded-xl bg-surface-elevated border border-border p-3 gap-1.5"
                     >
                       <Text className="text-text-secondary text-xs font-semibold">
-                        {session.sessionDate || "Recent Session"}
+                        {session.sessionDate ||
+                          dict.exerciseDetail.recentSessionFallback}
                       </Text>
                       <View className="flex-row flex-wrap gap-2">
                         {session.sets.map((s) => (
@@ -501,7 +564,10 @@ export default function ExerciseDetailModal() {
                             key={s.set_number}
                             className="px-2.5 py-1 rounded-lg bg-surface border border-border"
                           >
-                            <Text className="text-text-primary text-xs font-medium">
+                            <Text
+                              style={{ fontVariant: ["tabular-nums"] }}
+                              className="text-text-primary text-xs font-medium"
+                            >
                               #{s.set_number}: {s.weight_kg}kg × {s.reps}
                             </Text>
                           </View>
@@ -512,17 +578,14 @@ export default function ExerciseDetailModal() {
                 </View>
               ) : (
                 <Text className="text-text-secondary text-sm">
-                  No sets logged yet for this exercise.
+                  {dict.exerciseDetail.noSetsLogged}
                 </Text>
               )}
             </View>
 
             {/* 7. Source Attribution */}
             <Text className="text-text-muted text-xs text-center pt-1">
-              {SOURCE_LABELS[exercise.source_name]}
-              {exercise.source_name === "ExerciseDB"
-                ? " • Exercise data & GIFs provided by AscendAPI (ExerciseDB)"
-                : ""}
+              {sourceAttribution}
             </Text>
           </ScrollView>
         </KeyboardAvoidingView>

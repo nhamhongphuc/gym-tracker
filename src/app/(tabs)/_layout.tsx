@@ -1,8 +1,11 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Tabs } from "expo-router";
 import { Colors } from "@/constants/theme";
+import { useI18n } from "@/i18n/LanguageContext";
 
 export default function TabsLayout() {
+  const { dict } = useI18n();
+
   return (
     <Tabs
       screenOptions={{
@@ -20,7 +23,7 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          title: "Workout",
+          title: dict.tabs.workout,
           tabBarIcon: ({ size, focused }) => (
             <Ionicons
               name={focused ? "barbell" : "barbell-outline"}
@@ -33,7 +36,7 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="plan"
         options={{
-          title: "Plan",
+          title: dict.tabs.plan,
           tabBarIcon: ({ size, focused }) => (
             <Ionicons
               name={focused ? "calendar" : "calendar-outline"}
@@ -46,7 +49,7 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="exercises"
         options={{
-          title: "Exercises",
+          title: dict.tabs.exercises,
           tabBarIcon: ({ size, focused }) => (
             <Ionicons
               name={focused ? "library" : "library-outline"}
@@ -59,7 +62,7 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="history"
         options={{
-          title: "History",
+          title: dict.tabs.history,
           tabBarIcon: ({ size, focused }) => (
             <Ionicons
               name={focused ? "stats-chart" : "stats-chart-outline"}

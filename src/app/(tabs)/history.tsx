@@ -11,8 +11,10 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { LanguageToggle } from "@/components/LanguageToggle";
 import { MuscleBodyMap } from "@/components/MuscleBodyMap";
 import { Colors, Shadows } from "@/constants/theme";
+import { formatTemplate, useI18n } from "@/i18n/LanguageContext";
 import {
   deleteWorkoutSession,
   fetchWorkoutHistory,
@@ -42,11 +44,14 @@ function getCurrentWeekBounds(): { monday: string; sunday: string } {
   };
 }
 
-function getCurrentMonthPrefix(): { prefix: string; label: string } {
+function getCurrentMonthPrefix(locale: "en" | "vi"): {
+  prefix: string;
+  label: string;
+} {
   const now = new Date();
   const year = now.getFullYear();
   const month = String(now.getMonth() + 1).padStart(2, "0");
-  const label = now.toLocaleDateString("en-US", {
+  const label = now.toLocaleDateString(locale === "vi" ? "vi-VN" : "en-US", {
     month: "long",
     year: "numeric",
   });
@@ -90,6 +95,7 @@ function groupLogsByExercise(
 }
 
 export default function HistoryScreen() {
+  const { locale, dict, tMuscle } = useI18n();
   const [sessions, setSessions] = useState<WorkoutSession[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -107,14 +113,12 @@ export default function HistoryScreen() {
       setSessions(data);
       setAnalyticsNowMs(Date.now());
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Failed to load workout history."
-      );
+      setError(err instanceof Error ? err.message : dict.history.loadError);
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [dict.history.loadError]);
 
   useFocusEffect(
     useCallback(() => {
@@ -123,8 +127,8 @@ export default function HistoryScreen() {
   );
 
   const { prefix: monthPrefix, label: monthLabel } = useMemo(
-    () => getCurrentMonthPrefix(),
-    []
+    () => getCurrentMonthPrefix(locale),
+    [locale]
   );
 
   const heroStats = useMemo(() => {
@@ -160,7 +164,6 @@ export default function HistoryScreen() {
     };
   }, [sessions, monthPrefix]);
 
-  // 14-day daily volume bars for SmartGym vertical bar chart
   const dailyBars = useMemo(() => {
     const volumeByDate = new Map<string, number>();
     for (const session of sessions) {
@@ -193,7 +196,8 @@ export default function HistoryScreen() {
     const maxVol = Math.max(1, ...days.map((d) => d.volume));
     return days.map((d) => ({
       ...d,
-      heightPct: d.volume > 0 ? Math.max(14, Math.round((d.volume / maxVol) * 100)) : 6,
+      heightPct:
+        d.volume > 0 ? Math.max(14, Math.round((d.volume / maxVol) * 100)) : 6,
     }));
   }, [sessions, analyticsNowMs]);
 
@@ -212,12 +216,15 @@ export default function HistoryScreen() {
 
   function confirmDeleteSession(session: WorkoutSession) {
     Alert.alert(
-      "Delete Workout",
-      `Delete "${session.plan_name_snapshot}" (${session.session_date})?`,
+      dict.history.deleteTitle,
+      formatTemplate(dict.history.deleteConfirm, {
+        name: session.plan_name_snapshot,
+        date: session.session_date,
+      }),
       [
-        { text: "Cancel", style: "cancel" },
+        { text: dict.common.cancel, style: "cancel" },
         {
-          text: "Delete",
+          text: dict.common.delete,
           style: "destructive",
           onPress: async () => {
             try {
@@ -225,8 +232,10 @@ export default function HistoryScreen() {
               setSessions((prev) => prev.filter((s) => s.id !== session.id));
             } catch (err) {
               Alert.alert(
-                "Delete Failed",
-                err instanceof Error ? err.message : "Could not delete session."
+                dict.history.deleteFailedTitle,
+                err instanceof Error
+                  ? err.message
+                  : dict.history.deleteFailedBody
               );
             }
           },
@@ -242,13 +251,19 @@ export default function HistoryScreen() {
     >
       {/* Editorial Header + Overview / Muscles Segmented Switcher */}
       <View className="px-4 pt-2 pb-3 bg-surface border-b border-border gap-3">
-        <View className="flex-row items-baseline justify-between">
-          <Text className="text-text-primary text-2xl font-extrabold">
-            {segment === "overview" ? monthLabel : "Muscles"}
-          </Text>
-          <Text className="text-text-secondary text-xs font-semibold">
-            {sessions.length} total logs
-          </Text>
+        <View className="flex-row items-center justify-between gap-2">
+          <View className="flex-1">
+            <Text className="text-text-secondary text-xs font-semibold">
+              {sessions.length} {dict.history.totalLogsSuffix}
+            </Text>
+            <Text
+              numberOfLines={1}
+              className="text-text-primary text-2xl font-extrabold"
+            >
+              {segment === "overview" ? monthLabel : dict.history.musclesTitle}
+            </Text>
+          </View>
+          <LanguageToggle />
         </View>
 
         <View className="flex-row p-1 rounded-xl bg-background border border-border">
@@ -263,7 +278,7 @@ export default function HistoryScreen() {
                 segment === "overview" ? "text-black" : "text-text-secondary"
               }`}
             >
-              Overview
+              {dict.history.overviewTab}
             </Text>
           </Pressable>
           <Pressable
@@ -277,7 +292,7 @@ export default function HistoryScreen() {
                 segment === "muscles" ? "text-black" : "text-text-secondary"
               }`}
             >
-              Muscles &amp; Recovery
+              {dict.history.musclesTab}
             </Text>
           </Pressable>
         </View>
@@ -287,7 +302,7 @@ export default function HistoryScreen() {
         <View className="flex-1 items-center justify-center gap-3">
           <ActivityIndicator size="large" color={Colors.primary} />
           <Text className="text-text-secondary text-sm">
-            Loading workout analytics...
+            {dict.history.loading}
           </Text>
         </View>
       ) : error ? (
@@ -304,7 +319,9 @@ export default function HistoryScreen() {
             onPress={loadHistory}
             className="min-h-11 px-5 rounded-xl bg-primary items-center justify-center"
           >
-            <Text className="text-black text-sm font-extrabold">Retry</Text>
+            <Text className="text-black text-sm font-extrabold">
+              {dict.common.retry}
+            </Text>
           </Pressable>
         </View>
       ) : segment === "muscles" ? (
@@ -319,7 +336,7 @@ export default function HistoryScreen() {
           />
 
           <Text className="text-text-secondary text-xs font-bold uppercase tracking-wider px-1">
-            Last 30 Days • Recovery &amp; Exercises
+            {dict.history.last30DaysHeading}
           </Text>
 
           {muscleList.map((item) => {
@@ -330,23 +347,30 @@ export default function HistoryScreen() {
                   ? Colors.warning
                   : Colors.danger;
 
+            const statusText =
+              item.statusLabel === "Fresh"
+                ? dict.history.statusFresh
+                : item.statusLabel === "Recovering"
+                  ? dict.history.statusRecovering
+                  : dict.history.statusFatigued;
+
             return (
               <View
                 key={item.muscleGroup}
                 style={Shadows.card}
                 className="rounded-2xl bg-surface border border-border p-4 gap-2.5"
               >
-                <View className="flex-row items-center justify-between">
-                  <View className="flex-row items-center gap-2">
+                <View className="flex-row items-center justify-between gap-2">
+                  <View className="flex-row items-center gap-2 flex-1">
                     <Text className="text-text-primary text-base font-extrabold">
-                      {item.muscleGroup}
+                      {tMuscle(item.muscleGroup)}
                     </Text>
                     <View className="px-2 py-0.5 rounded-md bg-surface-elevated border border-border">
                       <Text
                         style={{ fontVariant: ["tabular-nums"] }}
                         className="text-text-secondary text-[11px] font-bold"
                       >
-                        {item.setsCount} sets •{" "}
+                        {item.setsCount} {dict.history.setsLabel} •{" "}
                         {item.volumeKg.toLocaleString()} kg
                       </Text>
                     </View>
@@ -360,15 +384,17 @@ export default function HistoryScreen() {
                     }}
                   >
                     <Text
-                      style={{ color: statusColor, fontVariant: ["tabular-nums"] }}
+                      style={{
+                        color: statusColor,
+                        fontVariant: ["tabular-nums"],
+                      }}
                       className="text-[11px] font-extrabold"
                     >
-                      {item.statusLabel} {item.recoveryPercent}%
+                      {statusText} {item.recoveryPercent}%
                     </Text>
                   </View>
                 </View>
 
-                {/* Neon-Lime Intensity Bar */}
                 <View className="h-2 w-full rounded-full bg-background overflow-hidden">
                   <View
                     className="h-full rounded-full bg-primary"
@@ -381,7 +407,7 @@ export default function HistoryScreen() {
                 <Text className="text-text-secondary text-xs leading-4">
                   {item.exercises.length > 0
                     ? item.exercises.join(", ")
-                    : "No sets logged in the last 30 days."}
+                    : dict.history.noSets30Days}
                 </Text>
               </View>
             );
@@ -405,9 +431,9 @@ export default function HistoryScreen() {
                 className="rounded-2xl bg-surface border border-border p-4 gap-3"
               >
                 <View className="flex-row items-start justify-between">
-                  <View>
+                  <View className="flex-1">
                     <Text className="text-text-primary text-sm font-bold">
-                      Workouts This Month
+                      {dict.history.workoutsThisMonth}
                     </Text>
                     <Text
                       style={{ fontVariant: ["tabular-nums"] }}
@@ -416,16 +442,14 @@ export default function HistoryScreen() {
                       {heroStats.monthWorkouts}
                     </Text>
                     <Text className="text-text-secondary text-xs mt-0.5">
-                      You worked out {heroStats.monthWorkouts}{" "}
-                      {heroStats.monthWorkouts === 1 ? "time" : "times"} this
-                      month.
+                      {heroStats.monthWorkouts === 1
+                        ? dict.history.workedOutOne
+                        : formatTemplate(dict.history.workedOutMany, {
+                            count: heroStats.monthWorkouts,
+                          })}
                     </Text>
                   </View>
-                  <Ionicons
-                    name="flame"
-                    size={22}
-                    color={Colors.primary}
-                  />
+                  <Ionicons name="flame" size={22} color={Colors.primary} />
                 </View>
 
                 {/* 14-Day Vertical Bar Chart */}
@@ -452,9 +476,11 @@ export default function HistoryScreen() {
                       {dailyBars[0]?.dayNum}
                     </Text>
                     <Text className="text-text-muted text-[10px]">
-                      Last 14 Days Volume
+                      {dict.history.last14DaysVolume}
                     </Text>
-                    <Text className="text-text-muted text-[10px]">Today</Text>
+                    <Text className="text-text-muted text-[10px]">
+                      {dict.history.today}
+                    </Text>
                   </View>
                 </View>
               </View>
@@ -466,7 +492,7 @@ export default function HistoryScreen() {
               >
                 <View className="flex-1">
                   <Text className="text-text-primary text-sm font-bold">
-                    Weekly Volume
+                    {dict.history.weeklyVolume}
                   </Text>
                   <Text
                     style={{ fontVariant: ["tabular-nums"] }}
@@ -475,8 +501,10 @@ export default function HistoryScreen() {
                     {heroStats.weekVolumeKg.toLocaleString()} kg
                   </Text>
                   <Text className="text-text-secondary text-xs mt-0.5">
-                    {heroStats.weekSets} sets this week •{" "}
-                    {heroStats.monthVolumeKg.toLocaleString()} kg this month
+                    {formatTemplate(dict.history.setsThisWeek, {
+                      sets: heroStats.weekSets,
+                      monthVol: heroStats.monthVolumeKg.toLocaleString(),
+                    })}
                   </Text>
                 </View>
                 <View className="w-11 h-11 rounded-2xl bg-danger/15 items-center justify-center">
@@ -486,7 +514,7 @@ export default function HistoryScreen() {
 
               {sessions.length > 0 && (
                 <Text className="text-text-secondary text-xs font-bold uppercase tracking-wider pt-1">
-                  Completed Sessions
+                  {dict.history.completedSessions}
                 </Text>
               )}
             </View>
@@ -538,7 +566,9 @@ export default function HistoryScreen() {
                     <View className="px-2.5 py-1 rounded-lg bg-surface-elevated border border-border">
                       <Text className="text-text-secondary text-xs font-medium">
                         {grouped.length}{" "}
-                        {grouped.length === 1 ? "exercise" : "exercises"}
+                        {grouped.length === 1
+                          ? dict.history.exerciseSingle
+                          : dict.history.exercisePlural}
                       </Text>
                     </View>
                     <View className="px-2.5 py-1 rounded-lg bg-primary-subtle">
@@ -563,7 +593,7 @@ export default function HistoryScreen() {
                     {!!item.notes && (
                       <View className="p-2.5 rounded-xl bg-warning/10 border border-warning/30">
                         <Text className="text-warning text-xs font-bold mb-0.5">
-                          Session Notes
+                          {dict.history.sessionNotes}
                         </Text>
                         <Text className="text-text-primary text-xs">
                           {item.notes}
@@ -612,11 +642,10 @@ export default function HistoryScreen() {
                 color={Colors.textMuted}
               />
               <Text className="text-text-primary text-base font-bold">
-                No Completed Workouts Yet
+                {dict.history.emptyTitle}
               </Text>
               <Text className="text-text-secondary text-sm text-center">
-                Finish a workout on the Workout tab to see your charts,
-                volume, and muscle heatmap here.
+                {dict.history.emptyBody}
               </Text>
             </View>
           }

@@ -5,15 +5,23 @@ import {
   loadCache,
   saveCache,
 } from "@/lib/offlineQueue";
+import {
+  matchVerifiedExercise,
+  PROGRAM_PRESETS,
+  type ProgramPresetKey,
+} from "@/lib/programTemplates";
 import { supabase } from "@/lib/supabase";
 import type {
   Exercise,
   ExercisePRStats,
   PlanExercise,
   PlanExerciseWithDetails,
+  ProgramScheduleState,
+  ScheduleMode,
   SetLog,
   SetType,
   WorkoutPlan,
+  WorkoutProgram,
   WorkoutSession,
 } from "@/types/database";
 
@@ -74,27 +82,114 @@ function filterExercises(
 }
 
 // ============================================================
-// Group 1 — Plans & Split Builder
+// Group 1 — Programs, Rolling Queues & Split Builder
 // ============================================================
+
+interface RawRoutineExerciseRow {
+  id: string;
+  routine_id: string;
+  exercise_id: string;
+  order_index: number;
+  target_sets: number;
+  target_reps: string;
+  rest_seconds: number;
+  exercise: Exercise;
+}
+
+interface RawProgramRoutineRow {
+  id: string;
+  program_id: string;
+  order_index: number;
+  day_of_week: number | null;
+  short_label: string | null;
+  name: string;
+  is_rest_day: boolean;
+  notes: string | null;
+  routine_exercises?: RawRoutineExerciseRow[];
+}
+
+function mapRawRoutine(row: RawProgramRoutineRow): WorkoutPlan {
+  const mappedExercises: PlanExerciseWithDetails[] = [
+    ...(row.routine_exercises ?? []),
+  ]
+    .sort((a, b) => a.order_index - b.order_index)
+    .map((re) => ({
+      id: re.id,
+      plan_id: re.routine_id,
+      routine_id: re.routine_id,
+      exercise_id: re.exercise_id,
+      order_index: re.order_index,
+      target_sets: re.target_sets,
+      target_reps: re.target_reps,
+      rest_seconds: re.rest_seconds,
+      exercise: re.exercise,
+    }));
+
+  return {
+    id: row.id,
+    program_id: row.program_id,
+    order_index: row.order_index,
+    day_of_week: row.day_of_week,
+    short_label: row.short_label,
+    name: row.name,
+    is_rest_day: row.is_rest_day,
+    notes: row.notes,
+    plan_exercises: mappedExercises,
+  };
+}
+
+export async function fetchPrograms(): Promise<WorkoutProgram[]> {
+  try {
+    const [programsRes, routinesRes] = await Promise.all([
+      supabase
+        .from("workout_programs")
+        .select("*")
+        .order("created_at", { ascending: true }),
+      supabase
+        .from("program_routines")
+        .select("*, routine_exercises(*, exercise:exercises(*))")
+        .order("order_index", { ascending: true }),
+    ]);
+
+    if (programsRes.error) throw programsRes.error;
+    if (routinesRes.error) throw routinesRes.error;
+
+    const routinesByProgram = new Map<string, WorkoutPlan[]>();
+    for (const raw of (routinesRes.data ?? []) as RawProgramRoutineRow[]) {
+      const mapped = mapRawRoutine(raw);
+      const list = routinesByProgram.get(mapped.program_id) ?? [];
+      list.push(mapped);
+      routinesByProgram.set(mapped.program_id, list);
+    }
+
+    const programs = ((programsRes.data ?? []) as WorkoutProgram[]).map(
+      (prog) => ({
+        ...prog,
+        workout_plans: [...(routinesByProgram.get(prog.id) ?? [])].sort(
+          (a, b) => a.order_index - b.order_index
+        ),
+      })
+    );
+
+    await saveCache(CACHE_KEYS.PROGRAMS, programs);
+    const active = programs.find((p) => p.is_active) ?? programs[0];
+    if (active?.workout_plans) {
+      await saveCache(CACHE_KEYS.WEEKLY_PLANS, active.workout_plans);
+    }
+
+    return programs;
+  } catch (err) {
+    const cached = await loadCache<WorkoutProgram[]>(CACHE_KEYS.PROGRAMS);
+    if (cached && cached.length > 0) return cached;
+    throw err;
+  }
+}
 
 export async function fetchWeeklyPlans(): Promise<WorkoutPlan[]> {
   try {
-    const { data, error } = await supabase
-      .from("workout_plans")
-      .select("*, plan_exercises(*, exercise:exercises(*))")
-      .order("day_of_week", { ascending: true });
-
-    if (error) throw error;
-
-    const plans = ((data ?? []) as WorkoutPlan[]).map((plan) => ({
-      ...plan,
-      plan_exercises: [...(plan.plan_exercises ?? [])].sort(
-        (a, b) => a.order_index - b.order_index
-      ),
-    }));
-
-    await saveCache(CACHE_KEYS.WEEKLY_PLANS, plans);
-    return plans;
+    const programs = await fetchPrograms();
+    const active = programs.find((p) => p.is_active) ?? programs[0];
+    return active?.workout_plans ?? [];
   } catch (err) {
     const cached = await loadCache<WorkoutPlan[]>(CACHE_KEYS.WEEKLY_PLANS);
     if (cached) return cached;
@@ -102,12 +197,402 @@ export async function fetchWeeklyPlans(): Promise<WorkoutPlan[]> {
   }
 }
 
+export async function setActiveProgram(programId: string): Promise<void> {
+  const { error: offErr } = await supabase
+    .from("workout_programs")
+    .update({ is_active: false })
+    .neq("id", programId);
+  if (offErr) throw offErr;
+
+  const { error: onErr } = await supabase
+    .from("workout_programs")
+    .update({ is_active: true })
+    .eq("id", programId);
+  if (onErr) throw onErr;
+}
+
+export async function updateProgramMeta(
+  programId: string,
+  updates: Partial<
+    Pick<
+      WorkoutProgram,
+      "name" | "description" | "schedule_mode" | "next_routine_id"
+    >
+  >
+): Promise<void> {
+  if (updates.schedule_mode === "weekly") {
+    const { data: existingRoutines, error: rErr } = await supabase
+      .from("program_routines")
+      .select("id, order_index, day_of_week")
+      .eq("program_id", programId)
+      .order("order_index", { ascending: true });
+    if (rErr) throw rErr;
+
+    const list = (existingRoutines ?? []) as {
+      id: string;
+      order_index: number;
+      day_of_week: number | null;
+    }[];
+
+    const usedDays = new Set<number>();
+    for (const r of list) {
+      if (r.day_of_week && r.day_of_week >= 1 && r.day_of_week <= 7) {
+        if (!usedDays.has(r.day_of_week)) {
+          usedDays.add(r.day_of_week);
+        }
+      }
+    }
+
+    // Ensure first 7 routines have distinct day_of_week 1..7 if any lack one
+    const unassigned = list.slice(0, 7).filter((r) => !r.day_of_week);
+    let candidateDay = 1;
+    for (const r of unassigned) {
+      while (usedDays.has(candidateDay) && candidateDay <= 7) {
+        candidateDay++;
+      }
+      if (candidateDay <= 7) {
+        const { error: uErr } = await supabase
+          .from("program_routines")
+          .update({ day_of_week: candidateDay })
+          .eq("id", r.id);
+        if (uErr) throw uErr;
+        usedDays.add(candidateDay);
+      }
+    }
+
+    // Fill missing days up to 7 with Rest Day slots so Mon-Sun is complete
+    const missingRestRows: {
+      program_id: string;
+      order_index: number;
+      day_of_week: number;
+      short_label: string;
+      name: string;
+      is_rest_day: boolean;
+      notes: string;
+    }[] = [];
+    for (let d = 1; d <= 7; d++) {
+      if (!usedDays.has(d)) {
+        missingRestRows.push({
+          program_id: programId,
+          order_index: d - 1,
+          day_of_week: d,
+          short_label: "REST",
+          name: "Rest & Recovery",
+          is_rest_day: true,
+          notes: "Active recovery, stretching, mobility",
+        });
+      }
+    }
+    if (missingRestRows.length > 0) {
+      const { error: insErr } = await supabase
+        .from("program_routines")
+        .insert(missingRestRows);
+      if (insErr) throw insErr;
+    }
+  }
+
+  const { error } = await supabase
+    .from("workout_programs")
+    .update(updates)
+    .eq("id", programId);
+
+  if (error) throw error;
+}
+
+export async function advanceProgramQueuePointer(
+  programId: string,
+  nextRoutineId: string | null
+): Promise<void> {
+  try {
+    const { error } = await supabase
+      .from("workout_programs")
+      .update({ next_routine_id: nextRoutineId })
+      .eq("id", programId);
+    if (error) throw error;
+  } catch (err) {
+    console.warn(
+      "[api] advanceProgramQueuePointer failed, queueing offline op:",
+      err
+    );
+    await enqueueOfflineOp({
+      type: "advance_program_pointer",
+      payload: { programId, nextRoutineId },
+      queuedAt: new Date().toISOString(),
+    });
+  }
+}
+
+export async function saveProgramScheduleState(
+  programId: string,
+  updates: {
+    schedule_state: ProgramScheduleState;
+    schedule_mode: ScheduleMode;
+    next_routine_id: string | null;
+  }
+): Promise<void> {
+  try {
+    const { error } = await supabase
+      .from("workout_programs")
+      .update({
+        schedule_state: updates.schedule_state,
+        schedule_mode: updates.schedule_mode,
+        next_routine_id: updates.next_routine_id,
+      })
+      .eq("id", programId);
+    if (error) throw error;
+  } catch (err) {
+    console.warn(
+      "[api] saveProgramScheduleState failed, queueing offline op:",
+      err
+    );
+    await enqueueOfflineOp({
+      type: "update_program_schedule",
+      payload: {
+        programId,
+        schedule_state: updates.schedule_state,
+        schedule_mode: updates.schedule_mode,
+        next_routine_id: updates.next_routine_id,
+      },
+      queuedAt: new Date().toISOString(),
+    });
+  }
+}
+
+export async function createProgramFromPreset(
+  presetKey: ProgramPresetKey,
+  catalog: Exercise[],
+  scheduleMode?: ScheduleMode
+): Promise<WorkoutProgram> {
+  const preset = PROGRAM_PRESETS.find((p) => p.key === presetKey);
+  if (!preset) {
+    throw new Error(`Unknown preset: ${presetKey}`);
+  }
+
+  const mode = scheduleMode ?? preset.defaultScheduleMode;
+
+  const { error: offErr } = await supabase
+    .from("workout_programs")
+    .update({ is_active: false })
+    .neq("id", "00000000-0000-0000-0000-000000000000");
+  if (offErr) throw offErr;
+
+  const { data: createdProgram, error: progErr } = await supabase
+    .from("workout_programs")
+    .insert({
+      name: preset.name,
+      description: preset.description,
+      schedule_mode: mode,
+      is_active: true,
+    })
+    .select("*")
+    .single();
+  if (progErr) throw progErr;
+
+  const routinePayloads = preset.routines.map((r, idx) => ({
+    program_id: createdProgram.id,
+    order_index: idx,
+    day_of_week: idx < 7 ? idx + 1 : null,
+    short_label: r.short_label,
+    name: r.name,
+    is_rest_day: r.is_rest_day,
+    notes: r.notes,
+  }));
+
+  if (mode === "weekly") {
+    for (let d = routinePayloads.length + 1; d <= 7; d++) {
+      routinePayloads.push({
+        program_id: createdProgram.id,
+        order_index: d - 1,
+        day_of_week: d,
+        short_label: "REST",
+        name: "Rest & Recovery",
+        is_rest_day: true,
+        notes: "Active recovery & mobility",
+      });
+    }
+  }
+
+  const { data: insertedRoutines, error: routErr } = await supabase
+    .from("program_routines")
+    .insert(routinePayloads)
+    .select("*")
+    .order("order_index", { ascending: true });
+  if (routErr) throw routErr;
+
+  const routineExercisesToInsert: {
+    routine_id: string;
+    exercise_id: string;
+    order_index: number;
+    target_sets: number;
+    target_reps: string;
+    rest_seconds: number;
+  }[] = [];
+
+  (insertedRoutines ?? []).forEach((routineRow, rIdx) => {
+    const spec = preset.routines[rIdx];
+    if (!spec) return;
+    let exOrder = 0;
+    for (const exSpec of spec.exercises) {
+      const match = matchVerifiedExercise(catalog, exSpec.candidates);
+      if (!match) continue;
+      routineExercisesToInsert.push({
+        routine_id: routineRow.id,
+        exercise_id: match.id,
+        order_index: exOrder++,
+        target_sets: exSpec.target_sets,
+        target_reps: exSpec.target_reps,
+        rest_seconds: exSpec.rest_seconds,
+      });
+    }
+  });
+
+  if (routineExercisesToInsert.length > 0) {
+    const { error: exErr } = await supabase
+      .from("routine_exercises")
+      .insert(routineExercisesToInsert);
+    if (exErr) throw exErr;
+  }
+
+  const firstRoutine =
+    (insertedRoutines ?? []).find((r) => !r.is_rest_day) ??
+    insertedRoutines?.[0] ??
+    null;
+
+  if (firstRoutine) {
+    await supabase
+      .from("workout_programs")
+      .update({ next_routine_id: firstRoutine.id })
+      .eq("id", createdProgram.id);
+  }
+
+  const all = await fetchPrograms();
+  return (
+    all.find((p) => p.id === createdProgram.id) ??
+    (createdProgram as WorkoutProgram)
+  );
+}
+
+export async function createCustomProgram(input: {
+  name: string;
+  description?: string;
+  scheduleMode: ScheduleMode;
+  routineCount: number;
+}): Promise<WorkoutProgram> {
+  const { error: offErr } = await supabase
+    .from("workout_programs")
+    .update({ is_active: false })
+    .neq("id", "00000000-0000-0000-0000-000000000000");
+  if (offErr) throw offErr;
+
+  const { data: createdProgram, error: progErr } = await supabase
+    .from("workout_programs")
+    .insert({
+      name: input.name.trim(),
+      description: input.description?.trim() || null,
+      schedule_mode: input.scheduleMode,
+      is_active: true,
+    })
+    .select("*")
+    .single();
+  if (progErr) throw progErr;
+
+  const slotCount =
+    input.scheduleMode === "weekly"
+      ? 7
+      : Math.min(7, Math.max(2, input.routineCount));
+
+  const routinePayloads = Array.from({ length: slotCount }, (_, idx) => ({
+    program_id: createdProgram.id,
+    order_index: idx,
+    day_of_week: input.scheduleMode === "weekly" ? idx + 1 : null,
+    short_label: `DAY ${idx + 1}`,
+    name: `Workout ${idx + 1}`,
+    is_rest_day: false,
+    notes: null,
+  }));
+
+  const { data: insertedRoutines, error: routErr } = await supabase
+    .from("program_routines")
+    .insert(routinePayloads)
+    .select("*")
+    .order("order_index", { ascending: true });
+  if (routErr) throw routErr;
+
+  const firstRoutine = insertedRoutines?.[0] ?? null;
+  if (firstRoutine) {
+    await supabase
+      .from("workout_programs")
+      .update({ next_routine_id: firstRoutine.id })
+      .eq("id", createdProgram.id);
+  }
+
+  const all = await fetchPrograms();
+  return (
+    all.find((p) => p.id === createdProgram.id) ??
+    (createdProgram as WorkoutProgram)
+  );
+}
+
+export async function deleteProgram(programId: string): Promise<void> {
+  const { error } = await supabase
+    .from("workout_programs")
+    .delete()
+    .eq("id", programId);
+  if (error) throw error;
+
+  const { data: remaining, error: rErr } = await supabase
+    .from("workout_programs")
+    .select("id, is_active")
+    .order("created_at", { ascending: true });
+  if (rErr) throw rErr;
+
+  const list = (remaining ?? []) as { id: string; is_active: boolean }[];
+  if (list.length > 0 && !list.some((p) => p.is_active)) {
+    await setActiveProgram(list[0].id);
+  }
+}
+
+export async function addRoutineSlot(
+  programId: string,
+  input: { name: string; short_label: string; order_index: number }
+): Promise<WorkoutPlan> {
+  const { data, error } = await supabase
+    .from("program_routines")
+    .insert({
+      program_id: programId,
+      name: input.name.trim(),
+      short_label: input.short_label.trim().slice(0, 10).toUpperCase(),
+      order_index: input.order_index,
+      day_of_week: null,
+      is_rest_day: false,
+      notes: null,
+    })
+    .select("*")
+    .single();
+
+  if (error) throw error;
+  return {
+    ...(data as RawProgramRoutineRow),
+    plan_exercises: [],
+  };
+}
+
+export async function deleteRoutineSlot(routineId: string): Promise<void> {
+  const { error } = await supabase
+    .from("program_routines")
+    .delete()
+    .eq("id", routineId);
+  if (error) throw error;
+}
+
 export async function updateDayPlanMeta(
   planId: string,
-  updates: Partial<Pick<WorkoutPlan, "name" | "is_rest_day" | "notes">>
+  updates: Partial<
+    Pick<WorkoutPlan, "name" | "short_label" | "is_rest_day" | "notes">
+  >
 ): Promise<void> {
   const { error } = await supabase
-    .from("workout_plans")
+    .from("program_routines")
     .update(updates)
     .eq("id", planId);
 
@@ -120,9 +605,9 @@ export async function addExerciseToPlan(
   orderIndex: number
 ): Promise<PlanExerciseWithDetails> {
   const { data, error } = await supabase
-    .from("plan_exercises")
+    .from("routine_exercises")
     .insert({
-      plan_id: planId,
+      routine_id: planId,
       exercise_id: exerciseId,
       order_index: orderIndex,
     })
@@ -130,7 +615,18 @@ export async function addExerciseToPlan(
     .single();
 
   if (error) throw error;
-  return data as PlanExerciseWithDetails;
+  const raw = data as RawRoutineExerciseRow;
+  return {
+    id: raw.id,
+    plan_id: raw.routine_id,
+    routine_id: raw.routine_id,
+    exercise_id: raw.exercise_id,
+    order_index: raw.order_index,
+    target_sets: raw.target_sets,
+    target_reps: raw.target_reps,
+    rest_seconds: raw.rest_seconds,
+    exercise: raw.exercise,
+  };
 }
 
 export async function updatePlanExercise(
@@ -143,7 +639,7 @@ export async function updatePlanExercise(
   >
 ): Promise<void> {
   const { error } = await supabase
-    .from("plan_exercises")
+    .from("routine_exercises")
     .update(updates)
     .eq("id", id);
 
@@ -156,11 +652,11 @@ export async function swapPlanExerciseOrder(
 ): Promise<void> {
   const [resA, resB] = await Promise.all([
     supabase
-      .from("plan_exercises")
+      .from("routine_exercises")
       .update({ order_index: b.order_index })
       .eq("id", a.id),
     supabase
-      .from("plan_exercises")
+      .from("routine_exercises")
       .update({ order_index: a.order_index })
       .eq("id", b.id),
   ]);
@@ -171,7 +667,7 @@ export async function swapPlanExerciseOrder(
 
 export async function removePlanExercise(id: string): Promise<void> {
   const { error } = await supabase
-    .from("plan_exercises")
+    .from("routine_exercises")
     .delete()
     .eq("id", id);
 
@@ -250,12 +746,15 @@ export async function fetchExerciseById(id: string): Promise<Exercise | null> {
 }
 
 export async function createCustomExercise(
-  input: Omit<Exercise, "id" | "external_id" | "source_name">
+  input: Omit<Exercise, "id" | "external_id" | "source_name" | "instructions_vi"> & {
+    instructions_vi?: string[];
+  }
 ): Promise<Exercise> {
   const { data, error } = await supabase
     .from("exercises")
     .insert({
       ...input,
+      instructions_vi: input.instructions_vi ?? [],
       external_id: null,
       source_name: "Custom",
     })
@@ -330,16 +829,15 @@ export async function getLastPerformedSets(
 }
 
 export async function fetchActiveTodaySession(
-  planId: string
+  routineId: string,
+  sessionDate = getLocalDateString()
 ): Promise<{ session: WorkoutSession | null; existingLogs: SetLog[] }> {
-  const today = getLocalDateString();
-
   try {
     const { data: existingSession, error: findError } = await supabase
       .from("workout_sessions")
       .select("*")
-      .eq("session_date", today)
-      .eq("plan_id", planId)
+      .eq("session_date", sessionDate)
+      .eq("routine_id", routineId)
       .is("completed_at", null)
       .order("started_at", { ascending: false })
       .limit(1)
@@ -367,12 +865,11 @@ export async function fetchActiveTodaySession(
 }
 
 export async function getOrCreateTodaySession(
-  plan: WorkoutPlan
+  plan: WorkoutPlan,
+  sessionDate = getLocalDateString()
 ): Promise<{ session: WorkoutSession; existingLogs: SetLog[] }> {
-  const today = getLocalDateString();
-
   try {
-    const existing = await fetchActiveTodaySession(plan.id);
+    const existing = await fetchActiveTodaySession(plan.id, sessionDate);
     if (existing.session) {
       return { session: existing.session, existingLogs: existing.existingLogs };
     }
@@ -382,9 +879,10 @@ export async function getOrCreateTodaySession(
       .from("workout_sessions")
       .insert({
         id,
-        plan_id: plan.id,
+        plan_id: null,
+        routine_id: plan.id,
         plan_name_snapshot: plan.name,
-        session_date: today,
+        session_date: sessionDate,
       })
       .select("*")
       .single();
@@ -403,9 +901,10 @@ export async function getOrCreateTodaySession(
     const nowIso = new Date().toISOString();
     const optimisticSession: WorkoutSession = {
       id: generateUuid(),
-      plan_id: plan.id,
+      plan_id: null,
+      routine_id: plan.id,
       plan_name_snapshot: plan.name,
-      session_date: today,
+      session_date: sessionDate,
       started_at: nowIso,
       completed_at: null,
       notes: null,

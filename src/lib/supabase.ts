@@ -12,13 +12,17 @@ if (!supabaseUrl || !supabaseAnonKey) {
   );
 }
 
+// Guard against Node SSR execution (e.g. Expo Router getServerManifest during Release bundling)
+// where global `window` is undefined and AsyncStorage's web implementation throws.
+const isNodeSsr = typeof window === "undefined";
+
 // Unlike web browsers, React Native has no window.localStorage or URL bar,
 // so we wire AsyncStorage for persistence and disable URL session detection.
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
-    storage: AsyncStorage,
-    autoRefreshToken: true,
-    persistSession: true,
+    storage: isNodeSsr ? undefined : AsyncStorage,
+    autoRefreshToken: !isNodeSsr,
+    persistSession: !isNodeSsr,
     detectSessionInUrl: false,
   },
 });

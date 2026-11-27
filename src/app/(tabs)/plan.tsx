@@ -16,31 +16,31 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { ExercisePickerModal } from "@/components/ExercisePickerModal";
+import { LanguageToggle } from "@/components/LanguageToggle";
+import { ProgramManagerModal } from "@/components/ProgramManagerModal";
 import { Colors, Shadows } from "@/constants/theme";
+import { formatTemplate, useI18n } from "@/i18n/LanguageContext";
 import {
   addExerciseToPlan,
-  fetchWeeklyPlans,
+  addRoutineSlot,
+  advanceProgramQueuePointer,
+  deleteRoutineSlot,
+  fetchPrograms,
   removePlanExercise,
   swapPlanExerciseOrder,
   updateDayPlanMeta,
   updatePlanExercise,
+  updateProgramMeta,
 } from "@/lib/api";
 import { CACHE_KEYS, saveCache } from "@/lib/offlineQueue";
+import { getRoutineShortLabel } from "@/lib/programTemplates";
 import type {
   Exercise,
   PlanExerciseWithDetails,
+  ScheduleMode,
   WorkoutPlan,
+  WorkoutProgram,
 } from "@/types/database";
-
-const WEEKDAYS = [
-  { day: 1, letter: "M", full: "Monday" },
-  { day: 2, letter: "T", full: "Tuesday" },
-  { day: 3, letter: "W", full: "Wednesday" },
-  { day: 4, letter: "T", full: "Thursday" },
-  { day: 5, letter: "F", full: "Friday" },
-  { day: 6, letter: "S", full: "Saturday" },
-  { day: 7, letter: "S", full: "Sunday" },
-] as const;
 
 interface ExerciseEditorDraft {
   sets: string;
@@ -53,12 +53,14 @@ function getTodayIsoWeekday(): number {
 }
 
 export default function PlanScreen() {
-  const [plans, setPlans] = useState<WorkoutPlan[]>([]);
-  const [selectedDay, setSelectedDay] = useState<number>(getTodayIsoWeekday);
+  const { dict, tMuscle, tEquipment, weekdayList } = useI18n();
+  const [programs, setPrograms] = useState<WorkoutProgram[]>([]);
+  const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const [nameDraft, setNameDraft] = useState("");
+  const [shortLabelDraft, setShortLabelDraft] = useState("");
   const [isRestDayDraft, setIsRestDayDraft] = useState(false);
   const [notesDraft, setNotesDraft] = useState("");
   const [savingMeta, setSavingMeta] = useState(false);
@@ -68,10 +70,12 @@ export default function PlanScreen() {
     Record<string, ExerciseEditorDraft>
   >({});
   const [pickerVisible, setPickerVisible] = useState(false);
+  const [programModalVisible, setProgramModalVisible] = useState(false);
 
   const syncDraftsFromPlan = useCallback((plan: WorkoutPlan | null) => {
     if (!plan) return;
     setNameDraft(plan.name);
+    setShortLabelDraft(plan.short_label ?? "");
     setIsRestDayDraft(plan.is_rest_day);
     setNotesDraft(plan.notes ?? "");
 
@@ -86,21 +90,59 @@ export default function PlanScreen() {
     setExerciseDrafts(drafts);
   }, []);
 
+  const activeProgram = useMemo(
+    () => programs.find((p) => p.is_active) ?? programs[0] ?? null,
+    [programs]
+  );
+
+  const plans = useMemo(
+    () => activeProgram?.workout_plans ?? [],
+    [activeProgram]
+  );
+
+  const selectedPlan = useMemo(() => {
+    if (plans.length === 0) return null;
+    if (selectedPlanId) {
+      const found = plans.find((p) => p.id === selectedPlanId);
+      if (found) return found;
+    }
+    if (activeProgram?.schedule_mode === "weekly") {
+      return (
+        plans.find((p) => p.day_of_week === getTodayIsoWeekday()) ?? plans[0]
+      );
+    }
+    return (
+      plans.find((p) => p.id === activeProgram?.next_routine_id) ??
+      plans.find((p) => !p.is_rest_day) ??
+      plans[0]
+    );
+  }, [plans, selectedPlanId, activeProgram]);
+
   const loadPlans = useCallback(async () => {
     try {
-      const data = await fetchWeeklyPlans();
+      const data = await fetchPrograms();
       setError(null);
-      setPlans(data);
-      const current = data.find((p) => p.day_of_week === selectedDay) ?? null;
-      syncDraftsFromPlan(current);
+      setPrograms(data);
+      const act = data.find((p) => p.is_active) ?? data[0] ?? null;
+      const list = act?.workout_plans ?? [];
+      const current =
+        (selectedPlanId && list.find((p) => p.id === selectedPlanId)) ||
+        (act?.schedule_mode === "weekly"
+          ? list.find((p) => p.day_of_week === getTodayIsoWeekday())
+          : list.find((p) => p.id === act?.next_routine_id) ??
+            list.find((p) => !p.is_rest_day)) ||
+        list[0] ||
+        null;
+      if (current) {
+        setSelectedPlanId(current.id);
+        syncDraftsFromPlan(current);
+      }
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Failed to load weekly split."
-      );
+      setError(err instanceof Error ? err.message : dict.plan.loadError);
     } finally {
       setLoading(false);
     }
-  }, [selectedDay, syncDraftsFromPlan]);
+  }, [selectedPlanId, syncDraftsFromPlan, dict.plan.loadError]);
 
   useFocusEffect(
     useCallback(() => {
@@ -108,14 +150,9 @@ export default function PlanScreen() {
     }, [loadPlans])
   );
 
-  const selectedPlan = useMemo(
-    () => plans.find((p) => p.day_of_week === selectedDay) ?? null,
-    [plans, selectedDay]
-  );
-
-  function handleSelectDay(day: number) {
-    setSelectedDay(day);
-    const plan = plans.find((p) => p.day_of_week === day) ?? null;
+  function handleSelectPlan(plan: WorkoutPlan | null) {
+    if (!plan) return;
+    setSelectedPlanId(plan.id);
     syncDraftsFromPlan(plan);
   }
 
@@ -128,22 +165,152 @@ export default function PlanScreen() {
   async function updatePlansAndCache(
     updater: (prev: WorkoutPlan[]) => WorkoutPlan[]
   ) {
-    setPlans((prev) => {
-      const next = updater(prev);
-      saveCache(CACHE_KEYS.WEEKLY_PLANS, next);
-      return next;
+    setPrograms((prevPrograms) => {
+      const targetId = activeProgram?.id ?? prevPrograms[0]?.id;
+      const nextPrograms = prevPrograms.map((prog) =>
+        prog.id === targetId
+          ? { ...prog, workout_plans: updater(prog.workout_plans ?? []) }
+          : prog
+      );
+      saveCache(CACHE_KEYS.PROGRAMS, nextPrograms);
+      const updatedActive = nextPrograms.find((p) => p.id === targetId);
+      if (updatedActive?.workout_plans) {
+        saveCache(CACHE_KEYS.WEEKLY_PLANS, updatedActive.workout_plans);
+      }
+      return nextPrograms;
     });
+  }
+
+  async function handleSwitchProgramMode(nextMode: ScheduleMode) {
+    if (!activeProgram || activeProgram.schedule_mode === nextMode) return;
+    try {
+      await updateProgramMeta(activeProgram.id, { schedule_mode: nextMode });
+      const fresh = await fetchPrograms();
+      setPrograms(fresh);
+      const nextActive = fresh.find((p) => p.id === activeProgram.id) ?? fresh[0];
+      const nextList = nextActive?.workout_plans ?? [];
+      const fallback = nextList[0] ?? null;
+      if (fallback) {
+        setSelectedPlanId(fallback.id);
+        syncDraftsFromPlan(fallback);
+      }
+    } catch (err) {
+      Alert.alert(
+        dict.plan.saveFailedTitle,
+        err instanceof Error ? err.message : dict.plan.saveFailedBody
+      );
+    }
+  }
+
+  async function handleSetUpNextInQueue() {
+    if (!activeProgram || !selectedPlan) return;
+    try {
+      await advanceProgramQueuePointer(activeProgram.id, selectedPlan.id);
+      const nextPrograms = programs.map((prog) =>
+        prog.id === activeProgram.id
+          ? { ...prog, next_routine_id: selectedPlan.id }
+          : prog
+      );
+      setPrograms(nextPrograms);
+      await saveCache(CACHE_KEYS.PROGRAMS, nextPrograms);
+    } catch (err) {
+      Alert.alert(
+        dict.plan.saveFailedTitle,
+        err instanceof Error ? err.message : dict.plan.saveFailedBody
+      );
+    }
+  }
+
+  async function handleAddRoutineSlot() {
+    if (!activeProgram) return;
+    const nextNum = plans.length + 1;
+    const maxOrder = plans.reduce((m, p) => Math.max(m, p.order_index), -1);
+    const defaultName = formatTemplate(dict.plan.newRoutineDefault, {
+      num: nextNum,
+    });
+    const defaultShort = `R${nextNum}`;
+    try {
+      const added = await addRoutineSlot(activeProgram.id, {
+        name: defaultName,
+        short_label: defaultShort,
+        order_index: maxOrder + 1,
+      });
+      await updatePlansAndCache((prev) => [...prev, added]);
+      setSelectedPlanId(added.id);
+      syncDraftsFromPlan(added);
+    } catch (err) {
+      Alert.alert(
+        dict.plan.addFailedTitle,
+        err instanceof Error ? err.message : dict.plan.addFailedBody
+      );
+    }
+  }
+
+  function confirmDeleteRoutine() {
+    if (!activeProgram || !selectedPlan || plans.length <= 1) return;
+    Alert.alert(
+      dict.plan.deleteRoutineBtn,
+      formatTemplate(dict.plan.deleteRoutineConfirm, {
+        name: selectedPlan.name,
+      }),
+      [
+        { text: dict.common.cancel, style: "cancel" },
+        {
+          text: dict.common.delete,
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await deleteRoutineSlot(selectedPlan.id);
+              const remaining = plans.filter((p) => p.id !== selectedPlan.id);
+              let nextPointer = activeProgram.next_routine_id;
+              if (nextPointer === selectedPlan.id) {
+                const candidate =
+                  remaining.find((r) => !r.is_rest_day) ?? remaining[0] ?? null;
+                nextPointer = candidate?.id ?? null;
+                await advanceProgramQueuePointer(activeProgram.id, nextPointer);
+              }
+              const nextPrograms = programs.map((prog) =>
+                prog.id === activeProgram.id
+                  ? {
+                      ...prog,
+                      next_routine_id: nextPointer,
+                      workout_plans: remaining,
+                    }
+                  : prog
+              );
+              setPrograms(nextPrograms);
+              await saveCache(CACHE_KEYS.PROGRAMS, nextPrograms);
+              const nextFocus = remaining[0] ?? null;
+              if (nextFocus) {
+                setSelectedPlanId(nextFocus.id);
+                syncDraftsFromPlan(nextFocus);
+              }
+            } catch (err) {
+              Alert.alert(
+                dict.plan.removeFailedTitle,
+                err instanceof Error
+                  ? err.message
+                  : dict.plan.removeFailedBody
+              );
+            }
+          },
+        },
+      ]
+    );
   }
 
   async function handleSaveDayMeta() {
     if (!selectedPlan) return;
     const trimmedName = nameDraft.trim() || selectedPlan.name;
+    const trimmedShort =
+      shortLabelDraft.trim().slice(0, 10).toUpperCase() || null;
     const trimmedNotes = notesDraft.trim() || null;
 
     setSavingMeta(true);
     try {
       await updateDayPlanMeta(selectedPlan.id, {
         name: trimmedName,
+        short_label: trimmedShort,
         is_rest_day: isRestDayDraft,
         notes: trimmedNotes,
       });
@@ -154,6 +321,7 @@ export default function PlanScreen() {
             ? {
                 ...p,
                 name: trimmedName,
+                short_label: trimmedShort,
                 is_rest_day: isRestDayDraft,
                 notes: trimmedNotes,
               }
@@ -165,8 +333,8 @@ export default function PlanScreen() {
       setTimeout(() => setMetaSavedBanner(false), 2000);
     } catch (err) {
       Alert.alert(
-        "Save Failed",
-        err instanceof Error ? err.message : "Could not save day settings."
+        dict.plan.saveFailedTitle,
+        err instanceof Error ? err.message : dict.plan.saveFailedBody
       );
     } finally {
       setSavingMeta(false);
@@ -204,8 +372,8 @@ export default function PlanScreen() {
       );
     } catch (err) {
       Alert.alert(
-        "Add Failed",
-        err instanceof Error ? err.message : "Could not add exercise to day."
+        dict.plan.addFailedTitle,
+        err instanceof Error ? err.message : dict.plan.addFailedBody
       );
     }
   }
@@ -266,8 +434,8 @@ export default function PlanScreen() {
       );
     } catch (err) {
       Alert.alert(
-        "Update Failed",
-        err instanceof Error ? err.message : "Could not save exercise targets."
+        dict.plan.updateFailedTitle,
+        err instanceof Error ? err.message : dict.plan.updateFailedBody
       );
     }
   }
@@ -301,22 +469,29 @@ export default function PlanScreen() {
       );
     } catch (err) {
       Alert.alert(
-        "Reorder Failed",
-        err instanceof Error ? err.message : "Could not reorder exercises."
+        dict.plan.reorderFailedTitle,
+        err instanceof Error ? err.message : dict.plan.reorderFailedBody
       );
     }
   }
 
   function confirmRemoveExercise(pe: PlanExerciseWithDetails) {
+    const contextName =
+      activeProgram?.schedule_mode === "weekly" && selectedPlan?.day_of_week
+        ? weekdayList.find((d) => d.day === selectedPlan.day_of_week)?.full ??
+          selectedPlan.name
+        : selectedPlan?.name ?? dict.plan.routineFallbackLabel;
+
     Alert.alert(
-      "Remove Exercise",
-      `Remove "${pe.exercise.name}" from ${
-        WEEKDAYS.find((d) => d.day === selectedDay)?.full ?? "this day"
-      }?`,
+      dict.plan.removeTitle,
+      formatTemplate(dict.plan.removeConfirm, {
+        name: pe.exercise.name,
+        day: contextName,
+      }),
       [
-        { text: "Cancel", style: "cancel" },
+        { text: dict.common.cancel, style: "cancel" },
         {
-          text: "Remove",
+          text: dict.common.delete,
           style: "destructive",
           onPress: async () => {
             try {
@@ -335,10 +510,10 @@ export default function PlanScreen() {
               );
             } catch (err) {
               Alert.alert(
-                "Remove Failed",
+                dict.plan.removeFailedTitle,
                 err instanceof Error
                   ? err.message
-                  : "Could not remove exercise."
+                  : dict.plan.removeFailedBody
               );
             }
           },
@@ -347,7 +522,13 @@ export default function PlanScreen() {
     );
   }
 
-  const dayMeta = WEEKDAYS.find((d) => d.day === selectedDay) ?? WEEKDAYS[0];
+  const isRolling = activeProgram?.schedule_mode === "rolling";
+  const activeWeekday = selectedPlan?.day_of_week ?? getTodayIsoWeekday();
+  const dayMeta =
+    weekdayList.find((d) => d.day === activeWeekday) ?? weekdayList[0];
+  const selectedContextLabel = isRolling
+    ? selectedPlan?.name ?? dict.plan.routineFallbackLabel
+    : dayMeta.full;
 
   if (loading) {
     return (
@@ -358,14 +539,14 @@ export default function PlanScreen() {
         <View className="flex-1 items-center justify-center gap-3">
           <ActivityIndicator size="large" color={Colors.primary} />
           <Text className="text-text-secondary text-sm">
-            Loading weekly split...
+            {dict.plan.loading}
           </Text>
         </View>
       </SafeAreaView>
     );
   }
 
-  if (error || !selectedPlan) {
+  if (error || !selectedPlan || !activeProgram) {
     return (
       <SafeAreaView
         edges={["top"]}
@@ -378,13 +559,15 @@ export default function PlanScreen() {
             color={Colors.danger}
           />
           <Text className="text-text-primary text-base font-semibold text-center">
-            {error ?? "No weekly plan found. Make sure schema.sql was executed."}
+            {error ?? dict.plan.loadError}
           </Text>
           <Pressable
             onPress={loadPlans}
             className="min-h-11 px-5 rounded-xl bg-primary items-center justify-center"
           >
-            <Text className="text-black text-sm font-extrabold">Retry</Text>
+            <Text className="text-black text-sm font-extrabold">
+              {dict.common.retry}
+            </Text>
           </Pressable>
         </View>
       </SafeAreaView>
@@ -398,60 +581,166 @@ export default function PlanScreen() {
       edges={["top"]}
       style={{ flex: 1, backgroundColor: Colors.background }}
     >
-      {/* Editorial Header + SmartGym Circular Day Selector */}
+      {/* Editorial Header + Program / Schedule Switcher */}
       <View className="bg-surface border-b border-border px-4 pt-2 pb-3 gap-3">
-        <View className="flex-row items-baseline justify-between">
-          <Text className="text-text-primary text-2xl font-extrabold">
-            Weekly Split
-          </Text>
-          <Text className="text-primary text-xs font-bold uppercase tracking-wider">
-            {dayMeta.full}
-          </Text>
+        <View className="flex-row items-center justify-between gap-2">
+          <View className="flex-1">
+            <Text className="text-primary text-[11px] font-extrabold uppercase tracking-wider">
+              {activeProgram.name}
+            </Text>
+            <Text className="text-text-primary text-2xl font-extrabold">
+              {dict.plan.title}
+            </Text>
+          </View>
+          <View className="flex-row items-center gap-2">
+            <Pressable
+              onPress={() => setProgramModalVisible(true)}
+              className="min-h-10 px-3 rounded-full bg-surface-elevated border border-border flex-row items-center gap-1.5"
+            >
+              <Ionicons
+                name="layers-outline"
+                size={15}
+                color={Colors.primary}
+              />
+              <Text className="text-text-primary text-xs font-bold">
+                {dict.plan.programsBtn}
+              </Text>
+            </Pressable>
+            <LanguageToggle />
+          </View>
         </View>
 
-        <View className="flex-row items-center justify-between">
-          {WEEKDAYS.map(({ day, letter }) => {
-            const active = selectedDay === day;
-            const planForDay = plans.find((p) => p.day_of_week === day);
-            const hasWork =
-              planForDay &&
-              !planForDay.is_rest_day &&
-              (planForDay.plan_exercises?.length ?? 0) > 0;
-
+        {/* Rolling Queue vs Fixed Weekdays Segmented Switcher */}
+        <View className="flex-row bg-surface-elevated rounded-xl p-1 border border-border">
+          {(["rolling", "weekly"] as const).map((mode) => {
+            const active = activeProgram.schedule_mode === mode;
             return (
               <Pressable
-                key={day}
-                onPress={() => handleSelectDay(day)}
-                className="min-h-11 min-w-11 items-center justify-center gap-1"
+                key={mode}
+                onPress={() => handleSwitchProgramMode(mode)}
+                className={`flex-1 min-h-9 rounded-lg flex-row items-center justify-center gap-1.5 ${
+                  active ? "bg-primary" : ""
+                }`}
               >
-                <View
-                  className={`w-10 h-10 rounded-full border items-center justify-center ${
+                <Ionicons
+                  name={mode === "rolling" ? "repeat" : "calendar-outline"}
+                  size={14}
+                  color={active ? "#000000" : Colors.textSecondary}
+                />
+                <Text
+                  className={`text-xs font-extrabold ${
+                    active ? "text-black" : "text-text-secondary"
+                  }`}
+                >
+                  {mode === "rolling"
+                    ? dict.plan.rollingMode
+                    : dict.plan.weeklyMode}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+
+        {isRolling ? (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={{ gap: 8, paddingRight: 8 }}
+          >
+            {plans.map((routine, idx) => {
+              const active = selectedPlan.id === routine.id;
+              const isUpNext = activeProgram.next_routine_id === routine.id;
+              const shortText = getRoutineShortLabel(
+                routine,
+                idx,
+                dict.workout.restChip
+              );
+              return (
+                <Pressable
+                  key={routine.id}
+                  onPress={() => handleSelectPlan(routine)}
+                  className={`min-h-10 px-3.5 rounded-full border flex-row items-center gap-1.5 ${
                     active
                       ? "bg-primary border-primary"
                       : "bg-surface-elevated border-border"
                   }`}
                 >
                   <Text
-                    className={`text-sm font-extrabold ${
-                      active ? "text-black" : "text-text-secondary"
+                    className={`text-xs font-extrabold ${
+                      active ? "text-black" : "text-text-primary"
                     }`}
                   >
-                    {letter}
+                    {idx + 1} • {shortText}
                   </Text>
-                </View>
-                <View
-                  className={`w-1.5 h-1.5 rounded-full ${
-                    planForDay?.is_rest_day
-                      ? "bg-text-muted"
-                      : hasWork
-                        ? "bg-primary"
-                        : "bg-transparent"
-                  }`}
-                />
-              </Pressable>
-            );
-          })}
-        </View>
+                  {isUpNext && (
+                    <View
+                      className={`w-2 h-2 rounded-full ${
+                        active ? "bg-black" : "bg-primary"
+                      }`}
+                    />
+                  )}
+                </Pressable>
+              );
+            })}
+
+            <Pressable
+              onPress={handleAddRoutineSlot}
+              className="min-h-10 px-3.5 rounded-full border border-dashed border-primary/70 bg-primary-subtle flex-row items-center justify-center"
+            >
+              <Text className="text-primary text-xs font-extrabold">
+                {dict.plan.addRoutineBtn}
+              </Text>
+            </Pressable>
+          </ScrollView>
+        ) : (
+          <View className="flex-row items-center justify-between">
+            {weekdayList.map(({ day, letter }) => {
+              const planForDay = plans.find((p) => p.day_of_week === day);
+              const active = Boolean(
+                planForDay && selectedPlan.id === planForDay.id
+              );
+              const hasWork =
+                planForDay &&
+                !planForDay.is_rest_day &&
+                (planForDay.plan_exercises?.length ?? 0) > 0;
+
+              return (
+                <Pressable
+                  key={day}
+                  onPress={() => handleSelectPlan(planForDay ?? null)}
+                  className="min-h-11 min-w-11 items-center justify-center gap-1"
+                >
+                  <View
+                    className={`w-10 h-10 rounded-full border items-center justify-center ${
+                      active
+                        ? "bg-primary border-primary"
+                        : "bg-surface-elevated border-border"
+                    }`}
+                  >
+                    <Text
+                      className={`${
+                        letter.length > 1 ? "text-xs" : "text-sm"
+                      } font-extrabold ${
+                        active ? "text-black" : "text-text-secondary"
+                      }`}
+                    >
+                      {letter}
+                    </Text>
+                  </View>
+                  <View
+                    className={`w-1.5 h-1.5 rounded-full ${
+                      planForDay?.is_rest_day
+                        ? "bg-text-muted"
+                        : hasWork
+                          ? "bg-primary"
+                          : "bg-transparent"
+                    }`}
+                  />
+                </Pressable>
+              );
+            })}
+          </View>
+        )}
       </View>
 
       <KeyboardAvoidingView
@@ -470,12 +759,12 @@ export default function PlanScreen() {
           >
             <View className="flex-row items-center justify-between">
               <Text className="text-text-primary text-base font-extrabold">
-                Routine Details
+                {dict.plan.routineDetails}
               </Text>
               {metaSavedBanner && (
                 <View className="px-2.5 py-1 rounded-full bg-primary-subtle border border-primary/40">
                   <Text className="text-primary text-xs font-bold">
-                    Saved ✓
+                    {dict.plan.savedBadge}
                   </Text>
                 </View>
               )}
@@ -483,24 +772,39 @@ export default function PlanScreen() {
 
             <View className="gap-1.5">
               <Text className="text-text-secondary text-xs font-semibold uppercase tracking-wider">
-                Routine Name
+                {dict.plan.routineNameLabel}
               </Text>
               <TextInput
                 value={nameDraft}
                 onChangeText={setNameDraft}
-                placeholder="e.g., Push (Chest, Shoulders, Triceps)"
+                placeholder={dict.plan.routineNamePlaceholder}
                 placeholderTextColor={Colors.textMuted}
                 className="bg-surface-elevated border border-border rounded-xl px-3.5 py-2.5 text-text-primary text-sm font-medium"
+              />
+            </View>
+
+            <View className="gap-1.5">
+              <Text className="text-text-secondary text-xs font-semibold uppercase tracking-wider">
+                {dict.plan.shortTagLabel}
+              </Text>
+              <TextInput
+                value={shortLabelDraft}
+                onChangeText={setShortLabelDraft}
+                maxLength={12}
+                autoCapitalize="characters"
+                placeholder={dict.plan.shortTagPlaceholder}
+                placeholderTextColor={Colors.textMuted}
+                className="bg-surface-elevated border border-border rounded-xl px-3.5 py-2.5 text-text-primary text-sm font-bold"
               />
             </View>
 
             <View className="flex-row items-center justify-between py-1">
               <View className="flex-1 pr-3">
                 <Text className="text-text-primary text-sm font-semibold">
-                  Rest Day
+                  {dict.plan.restDayLabel}
                 </Text>
                 <Text className="text-text-secondary text-xs">
-                  Mark this day for active recovery &amp; mobility
+                  {dict.plan.restDaySubtitle}
                 </Text>
               </View>
               <Switch
@@ -513,12 +817,12 @@ export default function PlanScreen() {
 
             <View className="gap-1.5">
               <Text className="text-text-secondary text-xs font-semibold uppercase tracking-wider">
-                Day Notes / Cardio Finisher
+                {dict.plan.notesLabel}
               </Text>
               <TextInput
                 value={notesDraft}
                 onChangeText={setNotesDraft}
-                placeholder="Optional cardio or focus notes..."
+                placeholder={dict.plan.notesPlaceholder}
                 placeholderTextColor={Colors.textMuted}
                 multiline
                 className="bg-surface-elevated border border-border rounded-xl px-3.5 py-2.5 text-text-primary text-sm min-h-16"
@@ -531,9 +835,48 @@ export default function PlanScreen() {
               className="min-h-11 rounded-xl bg-primary-subtle border border-primary/50 items-center justify-center"
             >
               <Text className="text-primary text-sm font-bold">
-                {savingMeta ? "Saving..." : "Save Day Settings"}
+                {savingMeta ? dict.common.saving : dict.plan.saveSettings}
               </Text>
             </Pressable>
+
+            {isRolling && (
+              <View className="flex-row gap-2">
+                {!isRestDayDraft && (
+                  <Pressable
+                    onPress={handleSetUpNextInQueue}
+                    disabled={activeProgram.next_routine_id === selectedPlan.id}
+                    className={`flex-1 min-h-10 rounded-xl border items-center justify-center ${
+                      activeProgram.next_routine_id === selectedPlan.id
+                        ? "bg-primary border-primary"
+                        : "bg-surface-elevated border-border"
+                    }`}
+                  >
+                    <Text
+                      className={`text-xs font-extrabold ${
+                        activeProgram.next_routine_id === selectedPlan.id
+                          ? "text-black"
+                          : "text-text-primary"
+                      }`}
+                    >
+                      {activeProgram.next_routine_id === selectedPlan.id
+                        ? dict.plan.isUpNextBadge
+                        : dict.plan.setAsUpNextBtn}
+                    </Text>
+                  </Pressable>
+                )}
+
+                {plans.length > 1 && (
+                  <Pressable
+                    onPress={confirmDeleteRoutine}
+                    className="min-h-10 px-3.5 rounded-xl bg-surface-elevated border border-border items-center justify-center"
+                  >
+                    <Text className="text-danger text-xs font-bold">
+                      {dict.plan.deleteRoutineBtn}
+                    </Text>
+                  </Pressable>
+                )}
+              </View>
+            )}
           </View>
 
           {/* Assigned Exercises */}
@@ -541,10 +884,10 @@ export default function PlanScreen() {
             <View className="gap-3">
               <View className="flex-row items-center justify-between">
                 <Text className="text-text-primary text-base font-extrabold">
-                  Exercises ({dayExercises.length})
+                  {dict.plan.exercisesHeading} ({dayExercises.length})
                 </Text>
                 <Text className="text-text-secondary text-xs">
-                  Targets auto-save on blur
+                  {dict.plan.autoSaveHint}
                 </Text>
               </View>
 
@@ -556,8 +899,9 @@ export default function PlanScreen() {
                     color={Colors.textMuted}
                   />
                   <Text className="text-text-secondary text-sm text-center">
-                    No exercises assigned to {dayMeta.full} yet. Tap below to
-                    add from the verified library.
+                    {formatTemplate(dict.plan.emptyDay, {
+                      day: selectedContextLabel,
+                    })}
                   </Text>
                 </View>
               ) : (
@@ -602,7 +946,7 @@ export default function PlanScreen() {
 
                           <View className="flex-1">
                             <Text className="text-primary text-[11px] font-bold uppercase">
-                              Exercise {idx + 1}
+                              {dict.plan.exercisePrefix} {idx + 1}
                             </Text>
                             <Text
                               numberOfLines={1}
@@ -614,8 +958,8 @@ export default function PlanScreen() {
                               numberOfLines={1}
                               className="text-text-secondary text-xs mt-0.5"
                             >
-                              {pe.exercise.muscle_group} •{" "}
-                              {pe.exercise.equipment}
+                              {tMuscle(pe.exercise.muscle_group)} •{" "}
+                              {tEquipment(pe.exercise.equipment)}
                             </Text>
                           </View>
                         </Pressable>
@@ -665,7 +1009,7 @@ export default function PlanScreen() {
                       <View className="flex-row gap-2.5">
                         <View className="flex-1 gap-1">
                           <Text className="text-text-secondary text-[11px] font-semibold">
-                            Sets
+                            {dict.plan.setsLabel}
                           </Text>
                           <TextInput
                             value={draft.sets}
@@ -687,7 +1031,7 @@ export default function PlanScreen() {
 
                         <View className="flex-1 gap-1">
                           <Text className="text-text-secondary text-[11px] font-semibold">
-                            Reps
+                            {dict.plan.repsLabel}
                           </Text>
                           <TextInput
                             value={draft.reps}
@@ -706,7 +1050,7 @@ export default function PlanScreen() {
 
                         <View className="flex-1 gap-1">
                           <Text className="text-text-secondary text-[11px] font-semibold">
-                            Rest (s)
+                            {dict.plan.restLabel}
                           </Text>
                           <TextInput
                             value={draft.rest}
@@ -738,7 +1082,9 @@ export default function PlanScreen() {
               >
                 <Ionicons name="add-circle" size={20} color="#000000" />
                 <Text className="text-black text-sm font-extrabold">
-                  Add Exercise to {dayMeta.full}
+                  {formatTemplate(dict.plan.addExerciseBtn, {
+                    day: selectedContextLabel,
+                  })}
                 </Text>
               </Pressable>
             </View>
@@ -751,6 +1097,26 @@ export default function PlanScreen() {
         onClose={() => setPickerVisible(false)}
         onSelect={handleAddExercise}
         existingExerciseIds={existingExerciseIds}
+      />
+
+      <ProgramManagerModal
+        visible={programModalVisible}
+        programs={programs}
+        onClose={() => setProgramModalVisible(false)}
+        onProgramsChanged={(updated) => {
+          setPrograms(updated);
+          const nextAct = updated.find((p) => p.is_active) ?? updated[0] ?? null;
+          const nextList = nextAct?.workout_plans ?? [];
+          const nextFocus =
+            nextList.find((r) => r.id === nextAct?.next_routine_id) ??
+            nextList.find((r) => !r.is_rest_day) ??
+            nextList[0] ??
+            null;
+          if (nextFocus) {
+            setSelectedPlanId(nextFocus.id);
+            syncDraftsFromPlan(nextFocus);
+          }
+        }}
       />
     </SafeAreaView>
   );

@@ -1,8 +1,14 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase } from "@/lib/supabase";
-import type { SetLog, WorkoutSession } from "@/types/database";
+import type {
+  ProgramScheduleState,
+  ScheduleMode,
+  SetLog,
+  WorkoutSession,
+} from "@/types/database";
 
 export const CACHE_KEYS = {
+  PROGRAMS: "@cached_workout_programs",
   WEEKLY_PLANS: "@cached_weekly_plans",
   EXERCISES: "@cached_exercises",
   OFFLINE_QUEUE: "@gym_offline_queue",
@@ -27,6 +33,21 @@ export type OfflineOp =
   | {
       type: "complete_session";
       payload: { sessionId: string; notes?: string; completedAt?: string };
+      queuedAt: string;
+    }
+  | {
+      type: "advance_program_pointer";
+      payload: { programId: string; nextRoutineId: string | null };
+      queuedAt: string;
+    }
+  | {
+      type: "update_program_schedule";
+      payload: {
+        programId: string;
+        schedule_state: ProgramScheduleState;
+        schedule_mode: ScheduleMode;
+        next_routine_id: string | null;
+      };
       queuedAt: string;
     };
 
@@ -87,7 +108,8 @@ async function executeOfflineOp(op: OfflineOp): Promise<void> {
     case "create_session": {
       const { error } = await supabase.from("workout_sessions").upsert({
         id: op.payload.id,
-        plan_id: op.payload.plan_id,
+        plan_id: null,
+        routine_id: op.payload.routine_id ?? null,
         plan_name_snapshot: op.payload.plan_name_snapshot,
         session_date: op.payload.session_date,
         started_at: op.payload.started_at,
@@ -122,6 +144,26 @@ async function executeOfflineOp(op: OfflineOp): Promise<void> {
           notes: op.payload.notes ?? null,
         })
         .eq("id", op.payload.sessionId);
+      if (error) throw error;
+      return;
+    }
+    case "advance_program_pointer": {
+      const { error } = await supabase
+        .from("workout_programs")
+        .update({ next_routine_id: op.payload.nextRoutineId })
+        .eq("id", op.payload.programId);
+      if (error) throw error;
+      return;
+    }
+    case "update_program_schedule": {
+      const { error } = await supabase
+        .from("workout_programs")
+        .update({
+          schedule_state: op.payload.schedule_state,
+          schedule_mode: op.payload.schedule_mode,
+          next_routine_id: op.payload.next_routine_id,
+        })
+        .eq("id", op.payload.programId);
       if (error) throw error;
       return;
     }

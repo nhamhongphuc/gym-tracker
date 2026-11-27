@@ -18,28 +18,44 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { LanguageToggle } from "@/components/LanguageToggle";
+import { ProgramManagerModal } from "@/components/ProgramManagerModal";
 import { RestTimerBar } from "@/components/RestTimerBar";
 import { SetRow } from "@/components/SetRow";
 import { Colors, Shadows } from "@/constants/theme";
+import { formatTemplate, useI18n } from "@/i18n/LanguageContext";
 import {
   completeWorkoutSession,
   deleteSetLog,
   fetchActiveTodaySession,
   fetchExercises,
-  fetchWeeklyPlans,
+  fetchPrograms,
   getLastPerformedSets,
+  getLocalDateString,
   getOrCreateTodaySession,
+  saveProgramScheduleState,
   upsertSetLog,
 } from "@/lib/api";
 import {
+  CACHE_KEYS,
   flushOfflineQueue,
   generateUuid,
   getPendingCount,
+  saveCache,
 } from "@/lib/offlineQueue";
+import {
+  addDaysToDateString,
+  applyDateRoutineAssignment,
+  getIsoWeekdayForDateString,
+  getMondayOfDateString,
+  getRoutineShortLabel,
+  getWeekDaysFromMonday,
+  parseLocalNoon,
+  resolvePlanForDate,
+} from "@/lib/programTemplates";
 import {
   computeSmartSuggestion,
   rankSwapAlternatives,
-  type SmartSuggestion,
 } from "@/lib/smartCoach";
 import type {
   DraftSetRow,
@@ -48,18 +64,9 @@ import type {
   SetLog,
   SetType,
   WorkoutPlan,
+  WorkoutProgram,
   WorkoutSession,
 } from "@/types/database";
-
-const DAY_PILLS = [
-  { day: 1, letter: "M", full: "Monday" },
-  { day: 2, letter: "T", full: "Tuesday" },
-  { day: 3, letter: "W", full: "Wednesday" },
-  { day: 4, letter: "T", full: "Thursday" },
-  { day: 5, letter: "F", full: "Friday" },
-  { day: 6, letter: "S", full: "Saturday" },
-  { day: 7, letter: "S", full: "Sunday" },
-] as const;
 
 const SET_TYPE_ORDER: SetType[] = ["working", "warmup", "dropset", "failure"];
 
@@ -69,8 +76,12 @@ interface TimerState {
   exerciseName: string;
 }
 
-function getTodayIsoWeekday(): number {
-  return ((new Date().getDay() + 6) % 7) + 1;
+function slotPeKey(dateStr: string, peId: string): string {
+  return `${dateStr}__${peId}`;
+}
+
+function slotSessionKey(dateStr: string, planId: string): string {
+  return `${dateStr}__${planId}`;
 }
 
 function formatElapsed(startedAtIso: string, nowMs: number): string {
@@ -118,21 +129,33 @@ function buildDraftRows(
 }
 
 export default function WorkoutScreen() {
-  const [plans, setPlans] = useState<WorkoutPlan[]>([]);
-  const [selectedDay, setSelectedDay] = useState<number>(getTodayIsoWeekday);
+  const { locale, dict, tMuscle, tEquipment, weekdayList } = useI18n();
+
+  const [programs, setPrograms] = useState<WorkoutProgram[]>([]);
+  const [todayStr, setTodayStr] = useState(() => getLocalDateString());
+  const [selectedDateStr, setSelectedDateStr] = useState(() =>
+    getLocalDateString()
+  );
+  const [weekMondayStr, setWeekMondayStr] = useState(() =>
+    getMondayOfDateString(getLocalDateString())
+  );
+  const [assignScopeOverride, setAssignScopeOverride] = useState<
+    "shift" | "single" | null
+  >(null);
+  const [programModalVisible, setProgramModalVisible] = useState(false);
   const [loading, setLoading] = useState(true);
   const [hydratingDay, setHydratingDay] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Per-plan active session, drafts, Smart Trainer suggestions, and mid-workout swaps
+  // Per-plan active session, drafts, previous sets (for instant EN/VI Smart Coach), and mid-workout swaps
   const [sessionsByPlanId, setSessionsByPlanId] = useState<
     Record<string, WorkoutSession | null>
   >({});
   const [draftsByPeId, setDraftsByPeId] = useState<
     Record<string, DraftSetRow[]>
   >({});
-  const [suggestionsByPeId, setSuggestionsByPeId] = useState<
-    Record<string, SmartSuggestion | null>
+  const [prevSetsByPeId, setPrevSetsByPeId] = useState<
+    Record<string, SetLog[]>
   >({});
   const [swappedExerciseByPeId, setSwappedExerciseByPeId] = useState<
     Record<string, Exercise>
@@ -163,7 +186,9 @@ export default function WorkoutScreen() {
   const [finishModalVisible, setFinishModalVisible] = useState(false);
   const [sessionNotes, setSessionNotes] = useState("");
   const [completing, setCompleting] = useState(false);
-  const [completedBanner, setCompletedBanner] = useState(false);
+  const [completedBanner, setCompletedBanner] = useState<{
+    nextName: string | null;
+  } | null>(null);
 
   const refreshPendingCount = useCallback(async () => {
     const count = await getPendingCount();
@@ -179,28 +204,40 @@ export default function WorkoutScreen() {
         setPendingSyncCount(result.remaining);
         if (!silent && result.synced > 0) {
           Alert.alert(
-            "Synced",
-            `Synced ${result.synced} offline ${
-              result.synced === 1 ? "operation" : "operations"
-            } to Supabase.`
+            dict.workout.syncedTitle,
+            result.synced === 1
+              ? dict.workout.syncedOne
+              : formatTemplate(dict.workout.syncedMany, {
+                  count: result.synced,
+                })
           );
         } else if (!silent && result.remaining > 0) {
           Alert.alert(
-            "Still Offline",
-            `${result.remaining} operation(s) waiting for connection.`
+            dict.workout.stillOfflineTitle,
+            formatTemplate(dict.workout.stillOfflineBody, {
+              count: result.remaining,
+            })
           );
         }
       } finally {
         setSyncingQueue(false);
       }
     },
-    [syncingQueue]
+    [
+      syncingQueue,
+      dict.workout.syncedTitle,
+      dict.workout.syncedOne,
+      dict.workout.syncedMany,
+      dict.workout.stillOfflineTitle,
+      dict.workout.stillOfflineBody,
+    ]
   );
 
   // Flush offline queue automatically when app returns to foreground
   useEffect(() => {
     const sub = AppState.addEventListener("change", (nextState) => {
       if (nextState === "active") {
+        setTodayStr(getLocalDateString());
         handleFlushQueue(true);
       }
     });
@@ -240,22 +277,21 @@ export default function WorkoutScreen() {
   }, [timerState]);
 
   const loadPlansAndSync = useCallback(async () => {
+    setTodayStr(getLocalDateString());
     try {
-      const [fetchedPlans, pending] = await Promise.all([
-        fetchWeeklyPlans(),
+      const [fetchedPrograms, pending] = await Promise.all([
+        fetchPrograms(),
         getPendingCount(),
       ]);
       setError(null);
-      setPlans(fetchedPlans);
+      setPrograms(fetchedPrograms);
       setPendingSyncCount(pending);
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Failed to load workout split."
-      );
+      setError(err instanceof Error ? err.message : dict.workout.loadError);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [dict.workout.loadError]);
 
   useFocusEffect(
     useCallback(() => {
@@ -263,13 +299,45 @@ export default function WorkoutScreen() {
     }, [loadPlansAndSync])
   );
 
-  const selectedPlan = useMemo(
-    () => plans.find((p) => p.day_of_week === selectedDay) ?? null,
-    [plans, selectedDay]
+  const activeProgram = useMemo(
+    () => programs.find((p) => p.is_active) ?? programs[0] ?? null,
+    [programs]
   );
 
-  const activeSession = selectedPlan
-    ? sessionsByPlanId[selectedPlan.id] ?? null
+  const plans = useMemo(
+    () => activeProgram?.workout_plans ?? [],
+    [activeProgram]
+  );
+
+  const rollingWorkouts = useMemo(
+    () => plans.filter((p) => !p.is_rest_day),
+    [plans]
+  );
+
+  const isRolling = activeProgram?.schedule_mode === "rolling";
+  const effectiveScope: "shift" | "single" =
+    assignScopeOverride ?? (isRolling ? "shift" : "single");
+
+  const selectedResolution = useMemo(() => {
+    if (!activeProgram) {
+      return { plan: null, isRest: true, isSingleOverride: false };
+    }
+    return resolvePlanForDate(activeProgram, selectedDateStr, todayStr);
+  }, [activeProgram, selectedDateStr, todayStr]);
+
+  const selectedPlan = selectedResolution.isRest ? null : selectedResolution.plan;
+  const isVirtualRest = Boolean(selectedResolution.isRest);
+
+  const weekDays = useMemo(
+    () => getWeekDaysFromMonday(weekMondayStr),
+    [weekMondayStr]
+  );
+
+  const activeSessionKey = selectedPlan
+    ? slotSessionKey(selectedDateStr, selectedPlan.id)
+    : null;
+  const activeSession = activeSessionKey
+    ? sessionsByPlanId[activeSessionKey] ?? null
     : null;
 
   // Update live elapsed workout duration once an active session exists
@@ -281,97 +349,107 @@ export default function WorkoutScreen() {
     return () => clearInterval(interval);
   }, [activeSession?.started_at]);
 
-  // Hydrate draft rows, previous-session ghost values & Smart Trainer suggestions
-  const hydratePlan = useCallback(async (plan: WorkoutPlan) => {
-    const exercises = plan.plan_exercises ?? [];
-    if (plan.is_rest_day || exercises.length === 0) {
-      hydratedPlanIdsRef.current[plan.id] = true;
-      return;
-    }
-
-    const alreadyHydrated = Boolean(hydratedPlanIdsRef.current[plan.id]);
-    if (!alreadyHydrated) {
-      setHydratingDay(true);
-    }
-
-    try {
-      const { session, existingLogs } = alreadyHydrated
-        ? { session: null, existingLogs: [] }
-        : await fetchActiveTodaySession(plan.id);
-
-      if (!alreadyHydrated) {
-        setSessionsByPlanId((prev) => ({
-          ...prev,
-          [plan.id]: session,
-        }));
+  // Hydrate draft rows & previous-session ghost values for the selected date & routine
+  const hydratePlan = useCallback(
+    async (plan: WorkoutPlan, dateStr: string) => {
+      const exercises = plan.plan_exercises ?? [];
+      const sessKey = slotSessionKey(dateStr, plan.id);
+      if (plan.is_rest_day || exercises.length === 0) {
+        hydratedPlanIdsRef.current[sessKey] = true;
+        return;
       }
 
-      const prevResults = await Promise.all(
-        exercises.map(async (pe) => {
-          const prevSets = await getLastPerformedSets(
-            pe.exercise_id,
-            session?.id
-          ).catch(() => []);
-          const suggestion = computeSmartSuggestion(pe, prevSets);
-          return { pe, prevSets, suggestion };
-        })
-      );
+      const alreadyHydrated = Boolean(hydratedPlanIdsRef.current[sessKey]);
+      if (!alreadyHydrated) {
+        setHydratingDay(true);
+      }
 
-      setDraftsByPeId((prev) => {
-        const next = { ...prev };
-        for (const { pe, prevSets } of prevResults) {
-          if (!next[pe.id]) {
-            next[pe.id] = buildDraftRows(
-              pe,
+      try {
+        const { session, existingLogs } = alreadyHydrated
+          ? { session: null, existingLogs: [] }
+          : await fetchActiveTodaySession(plan.id, dateStr);
+
+        if (!alreadyHydrated) {
+          setSessionsByPlanId((prev) => ({
+            ...prev,
+            [sessKey]: session,
+          }));
+        }
+
+        const prevResults = await Promise.all(
+          exercises.map(async (pe) => {
+            const prevSets = await getLastPerformedSets(
               pe.exercise_id,
-              existingLogs,
-              prevSets
-            );
-          }
-        }
-        return next;
-      });
+              session?.id
+            ).catch(() => []);
+            return { pe, prevSets };
+          })
+        );
 
-      setSuggestionsByPeId((prev) => {
-        const next = { ...prev };
-        for (const { pe, suggestion } of prevResults) {
-          if (next[pe.id] === undefined) {
-            next[pe.id] = suggestion;
+        setDraftsByPeId((prev) => {
+          const next = { ...prev };
+          for (const { pe, prevSets } of prevResults) {
+            const sKey = slotPeKey(dateStr, pe.id);
+            if (!next[sKey]) {
+              next[sKey] = buildDraftRows(
+                pe,
+                pe.exercise_id,
+                existingLogs,
+                prevSets
+              );
+            }
           }
-        }
-        return next;
-      });
+          return next;
+        });
 
-      hydratedPlanIdsRef.current[plan.id] = true;
-    } finally {
-      setHydratingDay(false);
-    }
-  }, []);
+        setPrevSetsByPeId((prev) => {
+          const next = { ...prev };
+          for (const { pe, prevSets } of prevResults) {
+            const sKey = slotPeKey(dateStr, pe.id);
+            if (next[sKey] === undefined) {
+              next[sKey] = prevSets;
+            }
+          }
+          return next;
+        });
+
+        hydratedPlanIdsRef.current[sessKey] = true;
+      } finally {
+        setHydratingDay(false);
+      }
+    },
+    []
+  );
 
   useEffect(() => {
     if (selectedPlan) {
-      hydratePlan(selectedPlan);
+      hydratePlan(selectedPlan, selectedDateStr);
     }
-  }, [selectedPlan, hydratePlan]);
+  }, [selectedPlan, selectedDateStr, hydratePlan]);
 
   async function ensureSessionForPlan(
-    plan: WorkoutPlan
+    plan: WorkoutPlan,
+    dateStr: string
   ): Promise<WorkoutSession> {
-    const existing = sessionsByPlanId[plan.id];
+    const sessKey = slotSessionKey(dateStr, plan.id);
+    const existing = sessionsByPlanId[sessKey];
     if (existing) return existing;
 
-    if (!sessionPromiseRef.current[plan.id]) {
-      sessionPromiseRef.current[plan.id] = getOrCreateTodaySession(plan)
+    if (!sessionPromiseRef.current[sessKey]) {
+      sessionPromiseRef.current[sessKey] = getOrCreateTodaySession(
+        plan,
+        dateStr
+      )
         .then(({ session }) => {
-          setSessionsByPlanId((prev) => ({ ...prev, [plan.id]: session }));
+          setSessionsByPlanId((prev) => ({ ...prev, [sessKey]: session }));
           return session;
         })
         .finally(() => {
-          delete sessionPromiseRef.current[plan.id];
+          delete sessionPromiseRef.current[sessKey];
         });
     }
 
-    return sessionPromiseRef.current[plan.id];
+    return sessionPromiseRef.current[sessKey];
   }
 
   function startRestTimer(seconds: number, exerciseName: string) {
@@ -405,37 +483,37 @@ export default function WorkoutScreen() {
   }
 
   function updateRow(
-    peId: string,
+    slotKey: string,
     localKey: string,
     updater: (row: DraftSetRow) => DraftSetRow
   ) {
     setDraftsByPeId((prev) => ({
       ...prev,
-      [peId]: (prev[peId] ?? []).map((row) =>
+      [slotKey]: (prev[slotKey] ?? []).map((row) =>
         row.local_key === localKey ? updater(row) : row
       ),
     }));
   }
 
   function getActiveExercise(pe: PlanExerciseWithDetails): Exercise {
-    return swappedExerciseByPeId[pe.id] ?? pe.exercise;
+    const sKey = slotPeKey(selectedDateStr, pe.id);
+    return swappedExerciseByPeId[sKey] ?? pe.exercise;
   }
 
   function handleApplySuggestion(
-    peId: string,
-    suggestion: SmartSuggestion
+    slotKey: string,
+    suggestedWeightKg: number,
+    suggestedReps: number
   ) {
     setDraftsByPeId((prev) => ({
       ...prev,
-      [peId]: (prev[peId] ?? []).map((row) => {
+      [slotKey]: (prev[slotKey] ?? []).map((row) => {
         if (row.is_completed || row.set_type === "warmup") return row;
         return {
           ...row,
           weight_kg:
-            suggestion.suggestedWeightKg > 0
-              ? String(suggestion.suggestedWeightKg)
-              : row.weight_kg,
-          reps: String(suggestion.suggestedReps),
+            suggestedWeightKg > 0 ? String(suggestedWeightKg) : row.weight_kg,
+          reps: String(suggestedReps),
         };
       }),
     }));
@@ -450,7 +528,10 @@ export default function WorkoutScreen() {
       const list = await fetchExercises();
       setCatalog(list);
     } catch {
-      Alert.alert("Unavailable", "Could not load exercise alternatives.");
+      Alert.alert(
+        dict.workout.swapUnavailableTitle,
+        dict.workout.swapUnavailableBody
+      );
     } finally {
       setLoadingSwapCatalog(false);
     }
@@ -459,16 +540,17 @@ export default function WorkoutScreen() {
   async function handleSelectSwapExercise(replacement: Exercise) {
     if (!swapTargetPe) return;
     const pe = swapTargetPe;
+    const sKey = slotPeKey(selectedDateStr, pe.id);
     setSwapTargetPe(null);
 
-    const oldRows = draftsByPeId[pe.id] ?? [];
+    const oldRows = draftsByPeId[sKey] ?? [];
     for (const row of oldRows) {
       if (row.is_completed && row.saved_log_id) {
         await deleteSetLog(row.saved_log_id);
       }
     }
 
-    setSwappedExerciseByPeId((prev) => ({ ...prev, [pe.id]: replacement }));
+    setSwappedExerciseByPeId((prev) => ({ ...prev, [sKey]: replacement }));
 
     const prevSets = await getLastPerformedSets(
       replacement.id,
@@ -483,25 +565,34 @@ export default function WorkoutScreen() {
 
     setDraftsByPeId((prev) => ({
       ...prev,
-      [pe.id]: buildDraftRows(swappedPe, replacement.id, [], prevSets),
+      [sKey]: buildDraftRows(swappedPe, replacement.id, [], prevSets),
     }));
-    setSuggestionsByPeId((prev) => ({
+    setPrevSetsByPeId((prev) => ({
       ...prev,
-      [pe.id]: computeSmartSuggestion(swappedPe, prevSets),
+      [sKey]: prevSets,
     }));
     await refreshPendingCount();
   }
 
   const swapAlternatives = useMemo(() => {
     if (!swapTargetPe || catalog.length === 0) return [];
-    const currentEx = swappedExerciseByPeId[swapTargetPe.id] ?? swapTargetPe.exercise;
+    const targetKey = slotPeKey(selectedDateStr, swapTargetPe.id);
+    const currentEx =
+      swappedExerciseByPeId[targetKey] ?? swapTargetPe.exercise;
     const excludeIds = new Set(
-      (selectedPlan?.plan_exercises ?? []).map(
-        (item) => (swappedExerciseByPeId[item.id] ?? item.exercise).id
-      )
+      (selectedPlan?.plan_exercises ?? []).map((item) => {
+        const itemKey = slotPeKey(selectedDateStr, item.id);
+        return (swappedExerciseByPeId[itemKey] ?? item.exercise).id;
+      })
     );
     return rankSwapAlternatives(currentEx, catalog, excludeIds);
-  }, [swapTargetPe, catalog, swappedExerciseByPeId, selectedPlan]);
+  }, [
+    swapTargetPe,
+    catalog,
+    swappedExerciseByPeId,
+    selectedPlan,
+    selectedDateStr,
+  ]);
 
   async function handleCycleSetType(
     pe: PlanExerciseWithDetails,
@@ -510,11 +601,12 @@ export default function WorkoutScreen() {
     const idx = SET_TYPE_ORDER.indexOf(row.set_type);
     const nextType = SET_TYPE_ORDER[(idx + 1) % SET_TYPE_ORDER.length];
     const activeEx = getActiveExercise(pe);
+    const sKey = slotPeKey(selectedDateStr, pe.id);
 
-    updateRow(pe.id, row.local_key, (r) => ({ ...r, set_type: nextType }));
+    updateRow(sKey, row.local_key, (r) => ({ ...r, set_type: nextType }));
 
     if (row.is_completed && selectedPlan) {
-      const session = await ensureSessionForPlan(selectedPlan);
+      const session = await ensureSessionForPlan(selectedPlan, selectedDateStr);
       await upsertSetLog({
         id: row.saved_log_id,
         session_id: session.id,
@@ -529,11 +621,11 @@ export default function WorkoutScreen() {
     }
   }
 
-  function handleCopyPrevious(peId: string, row: DraftSetRow) {
+  function handleCopyPrevious(slotKey: string, row: DraftSetRow) {
     if (row.prev_weight_kg === undefined && row.prev_reps === undefined) {
       return;
     }
-    updateRow(peId, row.local_key, (r) => ({
+    updateRow(slotKey, row.local_key, (r) => ({
       ...r,
       weight_kg:
         r.prev_weight_kg !== undefined ? String(r.prev_weight_kg) : r.weight_kg,
@@ -547,9 +639,10 @@ export default function WorkoutScreen() {
   ) {
     if (!selectedPlan) return;
     const activeEx = getActiveExercise(pe);
+    const sKey = slotPeKey(selectedDateStr, pe.id);
 
     if (row.is_completed) {
-      updateRow(pe.id, row.local_key, (r) => ({ ...r, is_completed: false }));
+      updateRow(sKey, row.local_key, (r) => ({ ...r, is_completed: false }));
       if (row.saved_log_id) {
         await deleteSetLog(row.saved_log_id);
         await refreshPendingCount();
@@ -572,7 +665,7 @@ export default function WorkoutScreen() {
 
     const logId = row.saved_log_id || generateUuid();
 
-    updateRow(pe.id, row.local_key, (r) => ({
+    updateRow(sKey, row.local_key, (r) => ({
       ...r,
       weight_kg: filledWeightStr,
       reps: filledRepsStr,
@@ -580,10 +673,10 @@ export default function WorkoutScreen() {
       saved_log_id: logId,
     }));
 
-    setCompletedBanner(false);
+    setCompletedBanner(null);
     startRestTimer(pe.rest_seconds, activeEx.name);
 
-    const session = await ensureSessionForPlan(selectedPlan);
+    const session = await ensureSessionForPlan(selectedPlan, selectedDateStr);
     const saved = await upsertSetLog({
       id: logId,
       session_id: session.id,
@@ -595,7 +688,7 @@ export default function WorkoutScreen() {
       is_completed: true,
     });
 
-    updateRow(pe.id, row.local_key, (r) => ({
+    updateRow(sKey, row.local_key, (r) => ({
       ...r,
       saved_log_id: saved.id ?? logId,
     }));
@@ -603,12 +696,13 @@ export default function WorkoutScreen() {
   }
 
   function handleAddSet(pe: PlanExerciseWithDetails) {
+    const sKey = slotPeKey(selectedDateStr, pe.id);
     setDraftsByPeId((prev) => {
-      const current = prev[pe.id] ?? [];
+      const current = prev[sKey] ?? [];
       const last = current[current.length - 1];
       const nextNum = current.length + 1;
       const newRow: DraftSetRow = {
-        local_key: `${pe.id}_set_${nextNum}_${generateUuid().slice(0, 8)}`,
+        local_key: `${sKey}_set_${nextNum}_${generateUuid().slice(0, 8)}`,
         set_number: nextNum,
         set_type: "working",
         weight_kg: "",
@@ -617,18 +711,19 @@ export default function WorkoutScreen() {
         prev_reps: last?.prev_reps,
         is_completed: false,
       };
-      return { ...prev, [pe.id]: [...current, newRow] };
+      return { ...prev, [sKey]: [...current, newRow] };
     });
   }
 
   async function handleRemoveSet(pe: PlanExerciseWithDetails) {
-    const current = draftsByPeId[pe.id] ?? [];
+    const sKey = slotPeKey(selectedDateStr, pe.id);
+    const current = draftsByPeId[sKey] ?? [];
     if (current.length <= 1) return;
     const removed = current[current.length - 1];
 
     setDraftsByPeId((prev) => ({
       ...prev,
-      [pe.id]: (prev[pe.id] ?? []).slice(0, -1),
+      [sKey]: (prev[sKey] ?? []).slice(0, -1),
     }));
 
     if (removed.is_completed && removed.saved_log_id) {
@@ -641,57 +736,119 @@ export default function WorkoutScreen() {
     if (!selectedPlan) return 0;
     let count = 0;
     for (const pe of selectedPlan.plan_exercises ?? []) {
-      for (const row of draftsByPeId[pe.id] ?? []) {
+      const sKey = slotPeKey(selectedDateStr, pe.id);
+      for (const row of draftsByPeId[sKey] ?? []) {
         if (row.is_completed) count++;
       }
     }
     return count;
-  }, [selectedPlan, draftsByPeId]);
+  }, [selectedPlan, draftsByPeId, selectedDateStr]);
+
+  async function handleAssignRoutineForDate(targetRoutineId: string | "REST") {
+    if (!activeProgram) return;
+    setCompletedBanner(null);
+
+    const updated = applyDateRoutineAssignment(
+      activeProgram,
+      selectedDateStr,
+      targetRoutineId,
+      effectiveScope,
+      todayStr
+    );
+
+    const nextPrograms = programs.map((prog) =>
+      prog.id === activeProgram.id
+        ? {
+            ...prog,
+            schedule_state: updated.schedule_state,
+            schedule_mode: updated.schedule_mode,
+            next_routine_id: updated.next_routine_id,
+          }
+        : prog
+    );
+
+    setPrograms(nextPrograms);
+    await saveCache(CACHE_KEYS.PROGRAMS, nextPrograms);
+    await saveProgramScheduleState(activeProgram.id, updated);
+    await refreshPendingCount();
+  }
 
   async function handleFinishWorkout() {
     if (!selectedPlan || completedSetsCount === 0) return;
 
     setCompleting(true);
     try {
-      const session = await ensureSessionForPlan(selectedPlan);
+      const finishedPlan = selectedPlan;
+      const finishDate = selectedDateStr;
+      const sessKey = slotSessionKey(finishDate, finishedPlan.id);
+      const session = await ensureSessionForPlan(finishedPlan, finishDate);
       await completeWorkoutSession(
         session.id,
         sessionNotes.trim() || undefined
       );
+
+      let bannerNextName: string | null = null;
+      if (isRolling && activeProgram) {
+        const tomorrowStr = addDaysToDateString(finishDate, 1);
+        const tomorrowRes = resolvePlanForDate(
+          activeProgram,
+          tomorrowStr,
+          todayStr
+        );
+        bannerNextName = tomorrowRes.plan?.name ?? null;
+      }
+
       await refreshPendingCount();
 
       setFinishModalVisible(false);
       setSessionNotes("");
       setTimerState(null);
-      setCompletedBanner(true);
+      setCompletedBanner({ nextName: bannerNextName });
 
-      setSessionsByPlanId((prev) => ({ ...prev, [selectedPlan.id]: null }));
-      hydratedPlanIdsRef.current[selectedPlan.id] = false;
+      setSessionsByPlanId((prev) => ({ ...prev, [sessKey]: null }));
+      hydratedPlanIdsRef.current[sessKey] = false;
       setDraftsByPeId((prev) => {
         const next = { ...prev };
-        for (const pe of selectedPlan.plan_exercises ?? []) {
-          delete next[pe.id];
+        for (const pe of finishedPlan.plan_exercises ?? []) {
+          delete next[slotPeKey(finishDate, pe.id)];
+        }
+        return next;
+      });
+      setPrevSetsByPeId((prev) => {
+        const next = { ...prev };
+        for (const pe of finishedPlan.plan_exercises ?? []) {
+          delete next[slotPeKey(finishDate, pe.id)];
         }
         return next;
       });
       setSwappedExerciseByPeId((prev) => {
         const next = { ...prev };
-        for (const pe of selectedPlan.plan_exercises ?? []) {
-          delete next[pe.id];
+        for (const pe of finishedPlan.plan_exercises ?? []) {
+          delete next[slotPeKey(finishDate, pe.id)];
         }
         return next;
       });
     } catch (err) {
       Alert.alert(
-        "Finish Failed",
-        err instanceof Error ? err.message : "Could not complete workout."
+        dict.workout.finishFailedTitle,
+        err instanceof Error ? err.message : dict.workout.finishFailedBody
       );
     } finally {
       setCompleting(false);
     }
   }
 
-  const dayMeta = DAY_PILLS.find((d) => d.day === selectedDay) ?? DAY_PILLS[0];
+  const selectedDateObj = parseLocalNoon(selectedDateStr);
+  const selectedIsoWeekday = getIsoWeekdayForDateString(selectedDateStr);
+  const dayMeta =
+    weekdayList.find((d) => d.day === selectedIsoWeekday) ?? weekdayList[0];
+  const shortDateTag = `${dayMeta.med} ${selectedDateObj.getDate()}/${selectedDateObj.getMonth() + 1}`;
+  const relativeDateTag =
+    selectedDateStr === todayStr
+      ? dict.workout.todayTag
+      : selectedDateStr === addDaysToDateString(todayStr, 1)
+        ? dict.workout.tomorrowTag
+        : null;
   const dayExercises = selectedPlan?.plan_exercises ?? [];
 
   if (loading) {
@@ -703,14 +860,14 @@ export default function WorkoutScreen() {
         <View className="flex-1 items-center justify-center gap-3">
           <ActivityIndicator size="large" color={Colors.primary} />
           <Text className="text-text-secondary text-sm">
-            Loading today&apos;s split...
+            {dict.workout.loadingSplit}
           </Text>
         </View>
       </SafeAreaView>
     );
   }
 
-  if (error || !selectedPlan) {
+  if (error || !activeProgram) {
     return (
       <SafeAreaView
         edges={["top"]}
@@ -723,18 +880,32 @@ export default function WorkoutScreen() {
             color={Colors.danger}
           />
           <Text className="text-text-primary text-base font-semibold text-center">
-            {error ?? "Could not load workout plan."}
+            {error ?? dict.workout.noProgramTitle}
           </Text>
           <Pressable
             onPress={loadPlansAndSync}
             className="min-h-11 px-5 rounded-xl bg-primary items-center justify-center"
           >
-            <Text className="text-black text-sm font-extrabold">Retry</Text>
+            <Text className="text-black text-sm font-extrabold">
+              {dict.common.retry}
+            </Text>
           </Pressable>
         </View>
       </SafeAreaView>
     );
   }
+
+  const headerEyebrow = `${shortDateTag.toUpperCase()}${
+    relativeDateTag ? ` • ${relativeDateTag}` : ""
+  }${
+    !isVirtualRest && selectedPlan && dayExercises.length > 0
+      ? ` • ${dayExercises.length} ${dict.workout.exercisesUpper}`
+      : ""
+  }`;
+
+  const headerTitle = isVirtualRest
+    ? dict.workout.restDayTitle
+    : selectedPlan?.name ?? dict.workout.restDayTitle;
 
   return (
     <SafeAreaView
@@ -745,12 +916,48 @@ export default function WorkoutScreen() {
       <View className="bg-surface border-b border-border px-4 pt-2 pb-3 gap-3">
         <View className="flex-row items-center justify-between gap-2">
           <View className="flex-1">
+            <View className="flex-row items-center gap-1.5 mb-1.5 flex-wrap">
+              <Pressable
+                onPress={() => setProgramModalVisible(true)}
+                className="flex-row items-center gap-1.5 px-2.5 py-1 rounded-full bg-surface-elevated border border-border"
+              >
+                <Ionicons
+                  name={isRolling ? "repeat" : "calendar-outline"}
+                  size={12}
+                  color={Colors.primary}
+                />
+                <Text
+                  numberOfLines={1}
+                  className="text-primary text-[11px] font-extrabold max-w-40"
+                >
+                  {activeProgram.name}
+                </Text>
+                <Ionicons
+                  name="chevron-down"
+                  size={12}
+                  color={Colors.textSecondary}
+                />
+              </Pressable>
+
+              {selectedDateStr !== todayStr && (
+                <Pressable
+                  onPress={() => {
+                    setCompletedBanner(null);
+                    setSelectedDateStr(todayStr);
+                    setWeekMondayStr(getMondayOfDateString(todayStr));
+                  }}
+                  className="px-2.5 py-1 rounded-full bg-primary-subtle border border-primary/50"
+                >
+                  <Text className="text-primary text-[11px] font-extrabold">
+                    {dict.workout.jumpToday}
+                  </Text>
+                </Pressable>
+              )}
+            </View>
+
             <View className="flex-row items-center gap-2">
               <Text className="text-primary text-[11px] font-extrabold uppercase tracking-wider">
-                {dayMeta.full}
-                {!selectedPlan.is_rest_day && dayExercises.length > 0
-                  ? ` • ${dayExercises.length} EXERCISES`
-                  : ""}
+                {headerEyebrow}
               </Text>
               {activeSession?.started_at && (
                 <View className="px-2 py-0.5 rounded-full bg-surface-elevated border border-border">
@@ -767,24 +974,26 @@ export default function WorkoutScreen() {
               numberOfLines={1}
               className="text-text-primary text-2xl font-extrabold mt-0.5"
             >
-              {selectedPlan.name}
+              {headerTitle}
             </Text>
           </View>
 
-          <View className="flex-row items-center gap-2">
+          <View className="flex-row items-center gap-1.5">
+            <LanguageToggle />
+
             {pendingSyncCount > 0 && (
               <Pressable
                 onPress={() => handleFlushQueue(false)}
                 disabled={syncingQueue}
-                className="min-h-11 px-3 rounded-full bg-warning/15 border border-warning/50 flex-row items-center gap-1.5"
+                className="min-h-11 px-2.5 rounded-full bg-warning/15 border border-warning/50 flex-row items-center gap-1"
               >
                 <Ionicons
                   name="cloud-upload-outline"
-                  size={16}
+                  size={15}
                   color={Colors.warning}
                 />
                 <Text className="text-warning text-xs font-bold">
-                  {syncingQueue ? "Syncing" : `${pendingSyncCount}`}
+                  {syncingQueue ? "..." : `${pendingSyncCount}`}
                 </Text>
               </Pressable>
             )}
@@ -792,60 +1001,221 @@ export default function WorkoutScreen() {
             <Pressable
               onPress={() => setFinishModalVisible(true)}
               disabled={completedSetsCount === 0}
-              className={`min-h-11 px-4 rounded-full items-center justify-center ${
+              className={`min-h-11 px-3.5 rounded-full items-center justify-center ${
                 completedSetsCount > 0
                   ? "bg-primary"
                   : "bg-surface-elevated border border-border opacity-45"
               }`}
             >
               <Text
-                className={`text-sm font-extrabold ${
+                className={`text-xs font-extrabold ${
                   completedSetsCount > 0 ? "text-black" : "text-text-secondary"
                 }`}
               >
-                Finish
+                {dict.workout.finish}
               </Text>
             </Pressable>
           </View>
         </View>
 
-        {/* Circular Neon-Lime 7-Day Selector */}
-        <View className="flex-row items-center justify-between">
-          {DAY_PILLS.map((pill) => {
-            const active = selectedDay === pill.day;
-            const isToday = getTodayIsoWeekday() === pill.day;
-            return (
-              <Pressable
-                key={pill.day}
-                onPress={() => {
-                  setCompletedBanner(false);
-                  setSelectedDay(pill.day);
-                }}
-                className="min-h-11 min-w-11 items-center justify-center gap-1"
-              >
-                <View
-                  className={`w-10 h-10 rounded-full border items-center justify-center ${
+        {/* Interactive Date-Aware 7-Day Week Strip with Scheduled Routine Tags */}
+        <View className="flex-row items-center gap-1">
+          <Pressable
+            onPress={() => {
+              const prevMon = addDaysToDateString(weekMondayStr, -7);
+              setWeekMondayStr(prevMon);
+              setSelectedDateStr(
+                prevMon === getMondayOfDateString(todayStr) ? todayStr : prevMon
+              );
+              setCompletedBanner(null);
+            }}
+            className="min-h-11 px-1 items-center justify-center"
+          >
+            <Ionicons
+              name="chevron-back"
+              size={16}
+              color={Colors.textSecondary}
+            />
+          </Pressable>
+
+          <View className="flex-1 flex-row items-start justify-between">
+            {weekDays.map((cell) => {
+              const weekdayMeta =
+                weekdayList.find((w) => w.day === cell.dayOfWeek) ??
+                weekdayList[0];
+              const cellRes = resolvePlanForDate(
+                activeProgram,
+                cell.dateStr,
+                todayStr
+              );
+              const isSelected = cell.dateStr === selectedDateStr;
+              const isToday = cell.dateStr === todayStr;
+              const cellTag =
+                cellRes.isRest || !cellRes.plan
+                  ? dict.workout.restChip
+                  : getRoutineShortLabel(
+                      cellRes.plan,
+                      0,
+                      dict.workout.restChip
+                    );
+
+              return (
+                <Pressable
+                  key={cell.dateStr}
+                  onPress={() => {
+                    setCompletedBanner(null);
+                    setSelectedDateStr(cell.dateStr);
+                  }}
+                  className="flex-1 min-h-11 items-center gap-0.5"
+                >
+                  <Text className="text-[10px] font-bold text-text-muted">
+                    {weekdayMeta.letter}
+                  </Text>
+                  <View
+                    className={`w-9 h-9 rounded-full border items-center justify-center ${
+                      isSelected
+                        ? "bg-primary border-primary"
+                        : isToday
+                          ? "bg-surface-elevated border-primary/80"
+                          : "bg-surface-elevated border-border"
+                    }`}
+                  >
+                    <Text
+                      style={{ fontVariant: ["tabular-nums"] }}
+                      className={`text-xs font-extrabold ${
+                        isSelected ? "text-black" : "text-text-primary"
+                      }`}
+                    >
+                      {cell.dayOfMonth}
+                    </Text>
+                  </View>
+                  <Text
+                    numberOfLines={1}
+                    className={`text-[9px] font-extrabold max-w-11 ${
+                      cellRes.isRest || !cellRes.plan
+                        ? "text-text-muted"
+                        : isSelected
+                          ? "text-primary"
+                          : "text-text-secondary"
+                    }`}
+                  >
+                    {cellTag}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+
+          <Pressable
+            onPress={() => {
+              const nextMon = addDaysToDateString(weekMondayStr, 7);
+              setWeekMondayStr(nextMon);
+              setSelectedDateStr(
+                nextMon === getMondayOfDateString(todayStr) ? todayStr : nextMon
+              );
+              setCompletedBanner(null);
+            }}
+            className="min-h-11 px-1 items-center justify-center"
+          >
+            <Ionicons
+              name="chevron-forward"
+              size={16}
+              color={Colors.textSecondary}
+            />
+          </Pressable>
+        </View>
+
+        {/* 1-Tap Routine Assigner for the Selected Date */}
+        <View className="gap-2 pt-0.5">
+          <View className="flex-row items-center justify-between gap-2">
+            <Text className="text-text-secondary text-[11px] font-bold">
+              {formatTemplate(dict.workout.assignRoutineLabel, {
+                date: shortDateTag,
+              })}
+            </Text>
+
+            <View className="flex-row bg-surface-elevated rounded-full p-0.5 border border-border">
+              {(["shift", "single"] as const).map((sc) => {
+                const active = effectiveScope === sc;
+                return (
+                  <Pressable
+                    key={sc}
+                    onPress={() => setAssignScopeOverride(sc)}
+                    className={`px-2.5 py-1 rounded-full ${
+                      active ? "bg-accent" : ""
+                    }`}
+                  >
+                    <Text
+                      className={`text-[10px] font-extrabold ${
+                        active ? "text-white" : "text-text-secondary"
+                      }`}
+                    >
+                      {sc === "shift"
+                        ? dict.workout.scopeShift
+                        : dict.workout.scopeSingle}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </View>
+
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={{ gap: 8, paddingRight: 8 }}
+          >
+            {rollingWorkouts.map((routine, rIdx) => {
+              const active = !isVirtualRest && selectedPlan?.id === routine.id;
+              const label = getRoutineShortLabel(
+                routine,
+                rIdx,
+                dict.workout.restChip
+              );
+
+              return (
+                <Pressable
+                  key={routine.id}
+                  onPress={() => handleAssignRoutineForDate(routine.id)}
+                  className={`min-h-9 px-3.5 rounded-full border items-center justify-center ${
                     active
                       ? "bg-primary border-primary"
                       : "bg-surface-elevated border-border"
                   }`}
                 >
                   <Text
-                    className={`text-sm font-extrabold ${
-                      active ? "text-black" : "text-text-secondary"
+                    className={`text-xs font-extrabold ${
+                      active ? "text-black" : "text-text-primary"
                     }`}
                   >
-                    {pill.letter}
+                    {label}
                   </Text>
-                </View>
-                <View
-                  className={`w-1.5 h-1.5 rounded-full ${
-                    isToday ? "bg-primary" : "bg-transparent"
-                  }`}
-                />
-              </Pressable>
-            );
-          })}
+                </Pressable>
+              );
+            })}
+
+            <Pressable
+              onPress={() => handleAssignRoutineForDate("REST")}
+              className={`min-h-9 px-3.5 rounded-full border flex-row items-center gap-1.5 ${
+                isVirtualRest
+                  ? "bg-primary border-primary"
+                  : "bg-surface-elevated border-border"
+              }`}
+            >
+              <Ionicons
+                name="bed-outline"
+                size={13}
+                color={isVirtualRest ? "#000000" : Colors.textSecondary}
+              />
+              <Text
+                className={`text-xs font-extrabold ${
+                  isVirtualRest ? "text-black" : "text-text-secondary"
+                }`}
+              >
+                {dict.workout.restChip}
+              </Text>
+            </Pressable>
+          </ScrollView>
         </View>
       </View>
 
@@ -863,6 +1233,20 @@ export default function WorkoutScreen() {
           }}
           keyboardShouldPersistTaps="handled"
         >
+          {selectedDateStr > todayStr && (
+            <View className="rounded-xl bg-accent/10 border border-accent/35 px-3.5 py-2.5 flex-row items-center gap-2">
+              <Ionicons
+                name="calendar-outline"
+                size={16}
+                color={Colors.accent}
+              />
+              <Text className="flex-1 text-text-primary text-xs font-semibold">
+                {formatTemplate(dict.workout.futurePreviewBanner, {
+                  date: shortDateTag,
+                })}
+              </Text>
+            </View>
+          )}
           {completedBanner && (
             <View className="rounded-2xl bg-primary-subtle border border-primary p-4 flex-row items-center justify-between gap-3">
               <View className="flex-1 flex-row items-center gap-2.5">
@@ -873,10 +1257,14 @@ export default function WorkoutScreen() {
                 />
                 <View className="flex-1">
                   <Text className="text-primary text-sm font-extrabold">
-                    Workout Completed!
+                    {dict.workout.completedTitle}
                   </Text>
                   <Text className="text-text-secondary text-xs">
-                    Saved to your history &amp; muscle recovery map.
+                    {completedBanner.nextName
+                      ? formatTemplate(dict.workout.completedNextUp, {
+                          next: completedBanner.nextName,
+                        })
+                      : dict.workout.completedSubtitle}
                   </Text>
                 </View>
               </View>
@@ -885,47 +1273,50 @@ export default function WorkoutScreen() {
                 className="min-h-10 px-3.5 rounded-full bg-primary items-center justify-center"
               >
                 <Text className="text-black text-xs font-extrabold">
-                  History
+                  {dict.workout.viewHistory}
                 </Text>
               </Pressable>
             </View>
           )}
 
-          {!!selectedPlan.notes && !selectedPlan.is_rest_day && (
-            <View className="rounded-xl bg-surface border border-border px-3.5 py-2.5 flex-row items-center gap-2">
+          {!isVirtualRest && !!selectedPlan?.notes && !selectedPlan.is_rest_day && (
+            <View className="rounded-xl bg-surface border border-border px-3.5 py-2.5 flex-row items-start gap-2">
               <Ionicons
                 name="document-text-outline"
                 size={16}
                 color={Colors.accent}
+                style={{ marginTop: 2 }}
               />
-              <Text className="flex-1 text-text-secondary text-xs">
+              <Text className="flex-1 text-text-secondary text-xs leading-4">
                 {selectedPlan.notes}
               </Text>
             </View>
           )}
 
-          {selectedPlan.is_rest_day ? (
+          {isVirtualRest || !selectedPlan || selectedPlan.is_rest_day ? (
             <View
               style={Shadows.card}
               className="rounded-2xl bg-surface border border-border p-6 items-center gap-3 mt-4"
             >
               <Ionicons name="bed-outline" size={40} color={Colors.accent} />
               <Text className="text-text-primary text-lg font-extrabold">
-                Rest &amp; Recovery Day
+                {dict.workout.restDayTitle}
               </Text>
-              <Text className="text-text-secondary text-sm text-center">
-                {selectedPlan.notes ||
-                  "Active recovery, stretching, and mobility."}
+              <Text className="text-text-secondary text-sm text-center leading-5">
+                {(!isVirtualRest && selectedPlan?.notes) ||
+                  dict.workout.restDayDefaultNotes}
               </Text>
-              <Text className="text-primary text-xs font-bold mt-1">
-                Log Another Day&apos;s Split using the M–S circles above
+              <Text className="text-primary text-xs font-bold mt-1 text-center">
+                {isRolling
+                  ? dict.workout.restHintRolling
+                  : dict.workout.restDayHint}
               </Text>
             </View>
           ) : hydratingDay ? (
             <View className="py-16 items-center justify-center gap-3">
               <ActivityIndicator size="large" color={Colors.primary} />
               <Text className="text-text-secondary text-sm">
-                Loading sets &amp; Smart Trainer targets...
+                {dict.workout.loadingTargets}
               </Text>
             </View>
           ) : dayExercises.length === 0 ? (
@@ -939,28 +1330,35 @@ export default function WorkoutScreen() {
                 color={Colors.textMuted}
               />
               <Text className="text-text-primary text-base font-extrabold text-center">
-                No Exercises Planned for {dayMeta.full}
+                {dict.workout.noExercisesPrefix}{" "}
+                {isRolling ? selectedPlan.name : dayMeta.full}
               </Text>
               <Text className="text-text-secondary text-sm text-center">
-                Build your split in the Plan tab to start logging sets here.
+                {dict.workout.noExercisesSubtitle}
               </Text>
               <Pressable
                 onPress={() => router.push("/(tabs)/plan")}
                 className="min-h-11 px-5 rounded-full bg-primary items-center justify-center mt-1"
               >
                 <Text className="text-black text-sm font-extrabold">
-                  Open Plan Builder
+                  {dict.workout.openPlanBuilder}
                 </Text>
               </Pressable>
             </View>
           ) : (
             dayExercises.map((pe, idx) => {
+              const sKey = slotPeKey(selectedDateStr, pe.id);
               const activeEx = getActiveExercise(pe);
-              const isSwapped = Boolean(swappedExerciseByPeId[pe.id]);
+              const isSwapped = Boolean(swappedExerciseByPeId[sKey]);
               const previewUri =
                 activeEx.gif_url ?? activeEx.image_urls[0] ?? null;
-              const rows = draftsByPeId[pe.id] ?? [];
-              const suggestion = suggestionsByPeId[pe.id];
+              const rows = draftsByPeId[sKey] ?? [];
+              const prevSets = prevSetsByPeId[sKey] ?? [];
+              const suggestion = computeSmartSuggestion(
+                { ...pe, exercise_id: activeEx.id, exercise: activeEx },
+                prevSets,
+                locale
+              );
               const hasIncompleteWorking = rows.some(
                 (r) => !r.is_completed && r.set_type !== "warmup"
               );
@@ -971,7 +1369,7 @@ export default function WorkoutScreen() {
                   style={Shadows.card}
                   className="rounded-2xl bg-surface border border-border p-3.5 gap-3"
                 >
-                  {/* Exercise Card Header */}
+                  {/* Exercise Card Header (Exercise name stays English) */}
                   <View className="flex-row items-center gap-3">
                     <View className="w-12 h-12 rounded-xl bg-media-frame overflow-hidden items-center justify-center">
                       {previewUri ? (
@@ -993,12 +1391,12 @@ export default function WorkoutScreen() {
                     <View className="flex-1">
                       <View className="flex-row items-center gap-1.5">
                         <Text className="text-primary text-[11px] font-extrabold uppercase">
-                          {idx + 1} of {dayExercises.length}
+                          {idx + 1} {dict.common.of} {dayExercises.length}
                         </Text>
                         {isSwapped && (
                           <View className="px-1.5 py-0.5 rounded bg-accent/20">
                             <Text className="text-accent text-[10px] font-bold">
-                              Swapped
+                              {dict.workout.swappedBadge}
                             </Text>
                           </View>
                         )}
@@ -1011,10 +1409,12 @@ export default function WorkoutScreen() {
                       </Text>
                       <View className="flex-row items-center gap-2 mt-0.5 flex-wrap">
                         <Text className="text-text-secondary text-xs">
-                          {activeEx.muscle_group} • {activeEx.equipment}
+                          {tMuscle(activeEx.muscle_group)} •{" "}
+                          {tEquipment(activeEx.equipment)}
                         </Text>
                         <Text className="text-text-muted text-xs">
-                          • {pe.target_sets}×{pe.target_reps} • {pe.rest_seconds}s
+                          • {pe.target_sets}×{pe.target_reps} •{" "}
+                          {pe.rest_seconds}s
                         </Text>
                       </View>
                     </View>
@@ -1054,7 +1454,7 @@ export default function WorkoutScreen() {
                             color={Colors.accent}
                           />
                           <Text className="text-accent text-[11px] font-extrabold uppercase tracking-wider">
-                            Smart Trainer • {suggestion.badge}
+                            {dict.smartCoach.title} • {suggestion.badge}
                           </Text>
                         </View>
                         <Text className="text-text-primary text-xs font-bold">
@@ -1065,11 +1465,17 @@ export default function WorkoutScreen() {
                         </Text>
                       </View>
                       <Pressable
-                        onPress={() => handleApplySuggestion(pe.id, suggestion)}
+                        onPress={() =>
+                          handleApplySuggestion(
+                            sKey,
+                            suggestion.suggestedWeightKg,
+                            suggestion.suggestedReps
+                          )
+                        }
                         className="min-h-10 px-3.5 rounded-full bg-accent items-center justify-center"
                       >
                         <Text className="text-white text-xs font-extrabold">
-                          Apply
+                          {dict.common.apply}
                         </Text>
                       </Pressable>
                     </View>
@@ -1078,16 +1484,16 @@ export default function WorkoutScreen() {
                   {/* Set Columns Header */}
                   <View className="flex-row items-center gap-2 px-2">
                     <Text className="w-11 text-center text-text-muted text-[11px] font-bold">
-                      SET
+                      {dict.workout.colSet}
                     </Text>
                     <Text className="flex-1 text-center text-text-muted text-[11px] font-bold">
-                      PREVIOUS
+                      {dict.workout.colPrevious}
                     </Text>
                     <Text className="w-16 text-center text-text-muted text-[11px] font-bold">
-                      KG
+                      {dict.workout.colKg}
                     </Text>
                     <Text className="w-14 text-center text-text-muted text-[11px] font-bold">
-                      REPS
+                      {dict.workout.colReps}
                     </Text>
                     <Text className="w-11 text-center text-text-muted text-[11px] font-bold">
                       ✓
@@ -1101,15 +1507,15 @@ export default function WorkoutScreen() {
                         key={row.local_key}
                         row={row}
                         onCycleType={() => handleCycleSetType(pe, row)}
-                        onCopyPrevious={() => handleCopyPrevious(pe.id, row)}
+                        onCopyPrevious={() => handleCopyPrevious(sKey, row)}
                         onChangeWeight={(val) =>
-                          updateRow(pe.id, row.local_key, (r) => ({
+                          updateRow(sKey, row.local_key, (r) => ({
                             ...r,
                             weight_kg: val,
                           }))
                         }
                         onChangeReps={(val) =>
-                          updateRow(pe.id, row.local_key, (r) => ({
+                          updateRow(sKey, row.local_key, (r) => ({
                             ...r,
                             reps: val,
                           }))
@@ -1126,7 +1532,7 @@ export default function WorkoutScreen() {
                       className="flex-1 min-h-11 rounded-xl bg-surface-elevated border border-border items-center justify-center"
                     >
                       <Text className="text-text-primary text-xs font-bold">
-                        + Add Set
+                        {dict.workout.addSet}
                       </Text>
                     </Pressable>
                     <Pressable
@@ -1137,7 +1543,7 @@ export default function WorkoutScreen() {
                       }`}
                     >
                       <Text className="text-text-secondary text-xs font-bold">
-                        - Remove Set
+                        {dict.workout.removeSet}
                       </Text>
                     </Pressable>
                   </View>
@@ -1175,20 +1581,23 @@ export default function WorkoutScreen() {
           <View className="flex-row items-center justify-between px-4 py-3 bg-surface border-b border-border">
             <View className="flex-1 pr-3">
               <Text className="text-primary text-[11px] font-extrabold uppercase">
-                Machine Taken?
+                {dict.workout.swapEyebrow}
               </Text>
-              <Text numberOfLines={1} className="text-text-primary text-base font-extrabold">
-                Swap{" "}
-                {swapTargetPe
-                  ? getActiveExercise(swapTargetPe).name
-                  : "Exercise"}
+              <Text
+                numberOfLines={1}
+                className="text-text-primary text-base font-extrabold"
+              >
+                {dict.workout.swapTitlePrefix}{" "}
+                {swapTargetPe ? getActiveExercise(swapTargetPe).name : ""}
               </Text>
             </View>
             <Pressable
               onPress={() => setSwapTargetPe(null)}
               className="min-h-11 min-w-11 items-center justify-center px-2"
             >
-              <Text className="text-primary text-base font-bold">Cancel</Text>
+              <Text className="text-primary text-base font-bold">
+                {dict.common.cancel}
+              </Text>
             </Pressable>
           </View>
 
@@ -1196,7 +1605,7 @@ export default function WorkoutScreen() {
             <View className="flex-1 items-center justify-center gap-3">
               <ActivityIndicator size="large" color={Colors.primary} />
               <Text className="text-text-secondary text-sm">
-                Finding same-muscle alternatives...
+                {dict.workout.swapLoading}
               </Text>
             </View>
           ) : (
@@ -1236,12 +1645,13 @@ export default function WorkoutScreen() {
                         {item.name}
                       </Text>
                       <Text className="text-text-secondary text-xs mt-0.5">
-                        {item.muscle_group} • {item.equipment}
+                        {tMuscle(item.muscle_group)} •{" "}
+                        {tEquipment(item.equipment)}
                       </Text>
                     </View>
                     <View className="px-3 py-1.5 rounded-full bg-primary">
                       <Text className="text-black text-xs font-extrabold">
-                        Swap
+                        {dict.common.swap}
                       </Text>
                     </View>
                   </Pressable>
@@ -1250,7 +1660,7 @@ export default function WorkoutScreen() {
               ListEmptyComponent={
                 <View className="py-12 items-center">
                   <Text className="text-text-secondary text-sm">
-                    No alternative exercises found for this muscle group.
+                    {dict.workout.swapEmpty}
                   </Text>
                 </View>
               }
@@ -1278,19 +1688,22 @@ export default function WorkoutScreen() {
           >
             <View className="gap-1">
               <Text className="text-text-primary text-lg font-extrabold">
-                Finish Workout?
+                {dict.workout.finishTitle}
               </Text>
               <Text className="text-text-secondary text-xs">
                 {completedSetsCount}{" "}
-                {completedSetsCount === 1 ? "set" : "sets"} logged for{" "}
-                {selectedPlan.name}.
+                {completedSetsCount === 1
+                  ? dict.workout.finishSetSingle
+                  : dict.workout.finishSetPlural}{" "}
+                {dict.workout.finishLoggedFor}{" "}
+                {selectedPlan?.name ?? dict.workout.restDayTitle}.
               </Text>
             </View>
 
             <TextInput
               value={sessionNotes}
               onChangeText={setSessionNotes}
-              placeholder="Optional session notes (energy, PRs, pump)..."
+              placeholder={dict.workout.finishNotesPlaceholder}
               placeholderTextColor={Colors.textMuted}
               multiline
               className="bg-surface-elevated border border-border rounded-xl px-3.5 py-2.5 text-text-primary text-sm min-h-20"
@@ -1303,7 +1716,7 @@ export default function WorkoutScreen() {
                 className="flex-1 min-h-11 rounded-xl bg-surface-elevated border border-border items-center justify-center"
               >
                 <Text className="text-text-secondary text-sm font-semibold">
-                  Keep Lifting
+                  {dict.workout.keepLifting}
                 </Text>
               </Pressable>
               <Pressable
@@ -1312,13 +1725,26 @@ export default function WorkoutScreen() {
                 className="flex-1 min-h-11 rounded-xl bg-primary items-center justify-center"
               >
                 <Text className="text-black text-sm font-extrabold">
-                  {completing ? "Saving..." : "Complete Workout"}
+                  {completing
+                    ? dict.common.saving
+                    : dict.workout.completeWorkout}
                 </Text>
               </Pressable>
             </View>
           </View>
         </KeyboardAvoidingView>
       </Modal>
+
+      <ProgramManagerModal
+        visible={programModalVisible}
+        programs={programs}
+        onClose={() => setProgramModalVisible(false)}
+        onProgramsChanged={(updated) => {
+          setPrograms(updated);
+          setAssignScopeOverride(null);
+          setCompletedBanner(null);
+        }}
+      />
     </SafeAreaView>
   );
 }
