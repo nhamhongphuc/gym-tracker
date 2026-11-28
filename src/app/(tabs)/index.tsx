@@ -27,6 +27,7 @@ import { Colors, Shadows } from "@/constants/theme";
 import { formatTemplate, useI18n } from "@/i18n/LanguageContext";
 import {
   completeWorkoutSession,
+  consumeDeletedSessionIds,
   deleteSetLog,
   fetchActiveTodaySession,
   fetchExercises,
@@ -37,7 +38,7 @@ import {
   saveProgramScheduleState,
   upsertSetLog,
 } from "@/lib/api";
-import { isCardioExercise } from "@/lib/exerciseUnits";
+import { clampNumber, isCardioExercise } from "@/lib/exerciseUnits";
 import {
   CACHE_KEYS,
   flushOfflineQueue,
@@ -200,6 +201,8 @@ export default function WorkoutScreen() {
   const [extraPickerVisible, setExtraPickerVisible] = useState(false);
 
   const hydratedPlanIdsRef = useRef<Record<string, boolean>>({});
+  const hydratedPeKeysRef = useRef<Record<string, boolean>>({});
+  const daySessionIdsRef = useRef<Record<string, string[]>>({});
   const sessionPromiseRef = useRef<Record<string, Promise<WorkoutSession>>>({});
 
   // Live elapsed session clock
@@ -316,6 +319,58 @@ export default function WorkoutScreen() {
 
   const loadPlansAndSync = useCallback(async () => {
     setTodayStr(getLocalDateString());
+    const deletedIds = consumeDeletedSessionIds();
+    if (deletedIds.size > 0) {
+      const affectedSlots: string[] = [];
+      const affectedDates = new Set<string>();
+      for (const [sessKey, ids] of Object.entries(daySessionIdsRef.current)) {
+        if (ids.some((id) => deletedIds.has(id))) {
+          affectedSlots.push(sessKey);
+          affectedDates.add(sessKey.split("__")[0]);
+        }
+      }
+      for (const sessKey of affectedSlots) {
+        delete hydratedPlanIdsRef.current[sessKey];
+        delete daySessionIdsRef.current[sessKey];
+      }
+      for (const peKey of Object.keys(hydratedPeKeysRef.current)) {
+        if (affectedDates.has(peKey.split("__")[0])) {
+          delete hydratedPeKeysRef.current[peKey];
+        }
+      }
+      setSessionsByPlanId((prev) => {
+        const next = { ...prev };
+        for (const [sessKey, sess] of Object.entries(next)) {
+          if (
+            affectedSlots.includes(sessKey) ||
+            (sess && deletedIds.has(sess.id))
+          ) {
+            delete next[sessKey];
+          }
+        }
+        return next;
+      });
+      if (affectedSlots.length > 0) {
+        setExtraExercisesBySlot((prev) => {
+          const next = { ...prev };
+          for (const sessKey of affectedSlots) delete next[sessKey];
+          return next;
+        });
+      }
+      if (affectedDates.size > 0) {
+        const clearDates = <T,>(prev: Record<string, T>) => {
+          const next = { ...prev };
+          for (const key of Object.keys(next)) {
+            if (affectedDates.has(key.split("__")[0])) delete next[key];
+          }
+          return next;
+        };
+        setDraftsByPeId(clearDates);
+        setPrevSetsByPeId(clearDates);
+        setSwappedExerciseByPeId(clearDates);
+      }
+    }
+
     try {
       const [fetchedPrograms, pending] = await Promise.all([
         fetchPrograms(),
@@ -401,12 +456,12 @@ export default function WorkoutScreen() {
 
   // Update live elapsed workout duration once an active session exists
   useEffect(() => {
-    if (!activeSession?.started_at) return;
+    if (!activeSession?.started_at || activeSession.completed_at) return;
     const interval = setInterval(() => {
       setClockMs(Date.now());
     }, 1000);
     return () => clearInterval(interval);
-  }, [activeSession?.started_at]);
+  }, [activeSession?.started_at, activeSession?.completed_at]);
 
   // Hydrate draft rows & previous-session ghost values for the selected date & routine
   const hydratePlan = useCallback(
@@ -419,17 +474,32 @@ export default function WorkoutScreen() {
       }
 
       const alreadyHydrated = Boolean(hydratedPlanIdsRef.current[sessKey]);
+      const unhydratedExercises = alreadyHydrated
+        ? exercises.filter(
+            (pe) => !hydratedPeKeysRef.current[slotPeKey(dateStr, pe.id)]
+          )
+        : exercises;
+
+      if (alreadyHydrated && unhydratedExercises.length === 0) {
+        return;
+      }
+
       if (!alreadyHydrated && exercises.length > 0) {
         setHydratingDay(true);
       }
 
       try {
-        const { session, existingLogs } = alreadyHydrated
-          ? { session: null, existingLogs: [] }
+        const { session, existingLogs, daySessionIds } = alreadyHydrated
+          ? {
+              session: null,
+              existingLogs: [],
+              daySessionIds: daySessionIdsRef.current[sessKey] ?? [],
+            }
           : await fetchActiveTodaySession(plan.id, dateStr);
 
         let hydratedExtras: PlanExerciseWithDetails[] = [];
         if (!alreadyHydrated) {
+          daySessionIdsRef.current[sessKey] = daySessionIds;
           setSessionsByPlanId((prev) => ({
             ...prev,
             [sessKey]: session,
@@ -464,12 +534,16 @@ export default function WorkoutScreen() {
           }
         }
 
-        const allToHydrate = [...exercises, ...hydratedExtras];
+        const excludeIds =
+          daySessionIds.length > 0 ? daySessionIds : session?.id;
+        const allToHydrate = alreadyHydrated
+          ? unhydratedExercises
+          : [...exercises, ...hydratedExtras];
         const prevResults = await Promise.all(
           allToHydrate.map(async (pe) => {
             const prevSets = await getLastPerformedSets(
               pe.exercise_id,
-              session?.id
+              excludeIds
             ).catch(() => []);
             return { pe, prevSets };
           })
@@ -487,6 +561,7 @@ export default function WorkoutScreen() {
                 prevSets
               );
             }
+            hydratedPeKeysRef.current[sKey] = true;
           }
           return next;
         });
@@ -530,6 +605,10 @@ export default function WorkoutScreen() {
         dateStr
       )
         .then(({ session }) => {
+          const currentIds = daySessionIdsRef.current[sessKey] ?? [];
+          if (!currentIds.includes(session.id)) {
+            daySessionIdsRef.current[sessKey] = [...currentIds, session.id];
+          }
           setSessionsByPlanId((prev) => ({ ...prev, [sessKey]: session }));
           return session;
         })
@@ -641,9 +720,14 @@ export default function WorkoutScreen() {
 
     setSwappedExerciseByPeId((prev) => ({ ...prev, [sKey]: replacement }));
 
+    const cachedIds = activeSessionKey
+      ? daySessionIdsRef.current[activeSessionKey]
+      : undefined;
+    const excludeIds =
+      cachedIds && cachedIds.length > 0 ? cachedIds : activeSession?.id;
     const prevSets = await getLastPerformedSets(
       replacement.id,
-      activeSession?.id
+      excludeIds
     ).catch(() => []);
 
     const swappedPe: PlanExerciseWithDetails = {
@@ -683,6 +767,38 @@ export default function WorkoutScreen() {
     selectedDateStr,
   ]);
 
+  async function persistCompletedSet(
+    sessionId: string,
+    exerciseId: string,
+    row: DraftSetRow,
+    weightStr: string,
+    repsStr: string,
+    speedStr?: string,
+    inclineStr?: string,
+    setType: SetType = row.set_type
+  ): Promise<SetLog | null> {
+    try {
+      return await upsertSetLog({
+        id: row.saved_log_id,
+        session_id: sessionId,
+        exercise_id: exerciseId,
+        set_number: row.set_number,
+        set_type: setType,
+        weight_kg: clampNumber(parseFloat(weightStr) || 0, 0, 9999) ?? 0,
+        reps: Math.max(0, Math.round(parseInt(repsStr, 10) || 0)),
+        speed_kmh: clampNumber(parseOptionalNumber(speedStr), 0, 99),
+        incline_pct: clampNumber(parseOptionalNumber(inclineStr), 0, 50),
+        is_completed: true,
+      });
+    } catch (err) {
+      Alert.alert(
+        dict.programsModal.actionFailedTitle,
+        err instanceof Error ? err.message : dict.workout.finishFailedBody
+      );
+      return null;
+    }
+  }
+
   async function handleCycleSetType(
     pe: PlanExerciseWithDetails,
     row: DraftSetRow
@@ -696,20 +812,45 @@ export default function WorkoutScreen() {
 
     if (row.is_completed && selectedPlan) {
       const session = await ensureSessionForPlan(selectedPlan, selectedDateStr);
-      await upsertSetLog({
-        id: row.saved_log_id,
-        session_id: session.id,
-        exercise_id: activeEx.id,
-        set_number: row.set_number,
-        set_type: nextType,
-        weight_kg: parseFloat(row.weight_kg) || 0,
-        reps: parseInt(row.reps, 10) || 0,
-        speed_kmh: parseOptionalNumber(row.speed_kmh),
-        incline_pct: parseOptionalNumber(row.incline_pct),
-        is_completed: true,
-      });
+      await persistCompletedSet(
+        session.id,
+        activeEx.id,
+        row,
+        row.weight_kg,
+        row.reps,
+        row.speed_kmh,
+        row.incline_pct,
+        nextType
+      );
       await refreshPendingCount();
     }
+  }
+
+  async function handlePersistCompletedRow(
+    pe: PlanExerciseWithDetails,
+    row: DraftSetRow
+  ) {
+    if (!row.is_completed || !selectedPlan) return;
+    const activeEx = getActiveExercise(pe);
+    const sKey = slotPeKey(selectedDateStr, pe.id);
+    const session = await ensureSessionForPlan(selectedPlan, selectedDateStr);
+    const logId = row.saved_log_id || generateUuid();
+    const saved = await persistCompletedSet(
+      session.id,
+      activeEx.id,
+      { ...row, saved_log_id: logId },
+      row.weight_kg,
+      row.reps,
+      row.speed_kmh,
+      row.incline_pct
+    );
+    if (saved && saved.id !== row.saved_log_id) {
+      updateRow(sKey, row.local_key, (r) => ({
+        ...r,
+        saved_log_id: saved.id ?? logId,
+      }));
+    }
+    await refreshPendingCount();
   }
 
   function handleCopyPrevious(slotKey: string, row: DraftSetRow) {
@@ -788,23 +929,22 @@ export default function WorkoutScreen() {
     startRestTimer(pe.rest_seconds, activeEx.name);
 
     const session = await ensureSessionForPlan(selectedPlan, selectedDateStr);
-    const saved = await upsertSetLog({
-      id: logId,
-      session_id: session.id,
-      exercise_id: activeEx.id,
-      set_number: row.set_number,
-      set_type: row.set_type,
-      weight_kg: parseFloat(filledWeightStr) || 0,
-      reps: parseInt(filledRepsStr, 10) || 0,
-      speed_kmh: parseOptionalNumber(filledSpeedStr),
-      incline_pct: parseOptionalNumber(filledInclineStr),
-      is_completed: true,
-    });
+    const saved = await persistCompletedSet(
+      session.id,
+      activeEx.id,
+      { ...row, saved_log_id: logId },
+      filledWeightStr,
+      filledRepsStr,
+      filledSpeedStr,
+      filledInclineStr
+    );
 
-    updateRow(sKey, row.local_key, (r) => ({
-      ...r,
-      saved_log_id: saved.id ?? logId,
-    }));
+    if (saved) {
+      updateRow(sKey, row.local_key, (r) => ({
+        ...r,
+        saved_log_id: saved.id ?? logId,
+      }));
+    }
     await refreshPendingCount();
   }
 
@@ -858,11 +998,15 @@ export default function WorkoutScreen() {
       exercise,
       1000 + extraExercises.length
     );
+    const cachedIds = daySessionIdsRef.current[activeSessionKey];
+    const excludeIds =
+      cachedIds && cachedIds.length > 0 ? cachedIds : activeSession?.id;
     const prevSets = await getLastPerformedSets(
       exercise.id,
-      activeSession?.id
+      excludeIds
     ).catch(() => []);
     const sKey = slotPeKey(selectedDateStr, extraPe.id);
+    hydratedPeKeysRef.current[sKey] = true;
 
     setExtraExercisesBySlot((prev) => ({
       ...prev,
@@ -985,33 +1129,15 @@ export default function WorkoutScreen() {
       setTimerState(null);
       setCompletedBanner({ nextName: bannerNextName });
 
-      setSessionsByPlanId((prev) => ({ ...prev, [sessKey]: null }));
-      hydratedPlanIdsRef.current[sessKey] = false;
-      setExtraExercisesBySlot((prev) => {
-        const next = { ...prev };
-        delete next[sessKey];
-        return next;
-      });
-      setDraftsByPeId((prev) => {
-        const next = { ...prev };
-        for (const pe of allDayExercises) {
-          delete next[slotPeKey(finishDate, pe.id)];
-        }
-        return next;
-      });
-      setPrevSetsByPeId((prev) => {
-        const next = { ...prev };
-        for (const pe of allDayExercises) {
-          delete next[slotPeKey(finishDate, pe.id)];
-        }
-        return next;
-      });
-      setSwappedExerciseByPeId((prev) => {
-        const next = { ...prev };
-        for (const pe of allDayExercises) {
-          delete next[slotPeKey(finishDate, pe.id)];
-        }
-        return next;
+      setSessionsByPlanId((prev) => {
+        const current = prev[sessKey] ?? session;
+        return {
+          ...prev,
+          [sessKey]: {
+            ...current,
+            completed_at: new Date().toISOString(),
+          },
+        };
       });
     } catch (err) {
       Alert.alert(
@@ -1178,7 +1304,7 @@ export default function WorkoutScreen() {
               <Text className="text-primary text-[11px] font-extrabold uppercase tracking-wider">
                 {headerEyebrow}
               </Text>
-              {activeSession?.started_at && (
+              {activeSession?.started_at && !activeSession.completed_at && (
                 <View className="px-2 py-0.5 rounded-full bg-surface-elevated border border-border">
                   <Text
                     style={{ fontVariant: ["tabular-nums"] }}
@@ -1795,6 +1921,7 @@ export default function WorkoutScreen() {
                             incline_pct: val,
                           }))
                         }
+                        onBlurRow={() => handlePersistCompletedRow(pe, row)}
                         onToggleComplete={() => handleToggleComplete(pe, row)}
                       />
                     ))}

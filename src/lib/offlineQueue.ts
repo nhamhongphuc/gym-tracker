@@ -53,6 +53,13 @@ export type OfflineOp =
 
 let isFlushing = false;
 
+export function isPermanentPgError(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  return (
+    typeof code === "string" && (code.startsWith("22") || code.startsWith("23"))
+  );
+}
+
 /**
  * Generates an RFC4122 v4 UUID without extra native/npm dependencies so
  * offline-created sessions and set logs receive deterministic Postgres PKs.
@@ -193,6 +200,13 @@ export async function flushOfflineQueue(): Promise<{
         await executeOfflineOp(op);
         synced++;
       } catch (err) {
+        if (isPermanentPgError(err)) {
+          console.warn(
+            `[offlineQueue] Dropping permanent invalid op (${op.type}):`,
+            err
+          );
+          continue;
+        }
         console.warn(`[offlineQueue] Failed to sync op (${op.type}):`, err);
         failed.push(op);
       }

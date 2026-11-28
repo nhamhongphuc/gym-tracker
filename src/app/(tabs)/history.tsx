@@ -169,22 +169,35 @@ export default function HistoryScreen() {
 
   const dailyBars = useMemo(() => {
     const volumeByDate = new Map<string, number>();
+    const cardioByDate = new Map<string, number>();
     for (const session of sessions) {
-      const sessionVol = (session.set_logs ?? []).reduce(
-        (sum, l) =>
-          l.is_completed && !isCardioExercise(l.exercise)
-            ? sum + l.weight_kg * l.reps
-            : sum,
-        0
-      );
+      let sessionVol = 0;
+      let sessionCardio = 0;
+      for (const l of session.set_logs ?? []) {
+        if (!l.is_completed) continue;
+        if (isCardioExercise(l.exercise)) {
+          sessionCardio += l.reps;
+        } else {
+          sessionVol += l.weight_kg * l.reps;
+        }
+      }
       volumeByDate.set(
         session.session_date,
         (volumeByDate.get(session.session_date) ?? 0) + sessionVol
       );
+      cardioByDate.set(
+        session.session_date,
+        (cardioByDate.get(session.session_date) ?? 0) + sessionCardio
+      );
     }
 
     const base = new Date(analyticsNowMs);
-    const days: { dateStr: string; dayNum: string; volume: number }[] = [];
+    const days: {
+      dateStr: string;
+      dayNum: string;
+      volume: number;
+      cardioMinutes: number;
+    }[] = [];
     for (let offset = 13; offset >= 0; offset--) {
       const d = new Date(
         base.getFullYear(),
@@ -196,6 +209,7 @@ export default function HistoryScreen() {
         dateStr,
         dayNum: String(d.getDate()),
         volume: volumeByDate.get(dateStr) ?? 0,
+        cardioMinutes: cardioByDate.get(dateStr) ?? 0,
       });
     }
 
@@ -203,7 +217,11 @@ export default function HistoryScreen() {
     return days.map((d) => ({
       ...d,
       heightPct:
-        d.volume > 0 ? Math.max(14, Math.round((d.volume / maxVol) * 100)) : 6,
+        d.volume > 0
+          ? Math.max(14, Math.round((d.volume / maxVol) * 100))
+          : d.cardioMinutes > 0
+            ? 20
+            : 6,
     }));
   }, [sessions, analyticsNowMs]);
 
@@ -476,7 +494,7 @@ export default function HistoryScreen() {
                       >
                         <View
                           className={`w-2 rounded-full ${
-                            bar.volume > 0
+                            bar.volume > 0 || bar.cardioMinutes > 0
                               ? "bg-primary"
                               : "bg-surface-elevated"
                           }`}
@@ -545,6 +563,13 @@ export default function HistoryScreen() {
                 0
               )
             );
+            const cardioMinutes = (item.set_logs ?? []).reduce(
+              (sum, log) =>
+                log.is_completed && isCardioExercise(log.exercise)
+                  ? sum + log.reps
+                  : sum,
+              0
+            );
 
             return (
               <Pressable
@@ -599,7 +624,13 @@ export default function HistoryScreen() {
                         style={{ fontVariant: ["tabular-nums"] }}
                         className="text-primary text-xs font-extrabold"
                       >
-                        {sessionVolume.toLocaleString()} kg
+                        {sessionVolume > 0 && cardioMinutes > 0
+                          ? `${sessionVolume.toLocaleString()} kg • ${cardioMinutes}m`
+                          : sessionVolume > 0
+                            ? `${sessionVolume.toLocaleString()} kg`
+                            : cardioMinutes > 0
+                              ? `${cardioMinutes} min`
+                              : "0 kg"}
                       </Text>
                     </View>
                   </View>

@@ -17,29 +17,12 @@ import { LanguageToggle } from "@/components/LanguageToggle";
 import { Colors, Shadows } from "@/constants/theme";
 import { formatTemplate, useI18n } from "@/i18n/LanguageContext";
 import { fetchExercises } from "@/lib/api";
-import { isCardioExercise } from "@/lib/exerciseUnits";
+import {
+  EQUIPMENT_FILTERS,
+  filterExerciseList,
+  MUSCLE_FILTERS,
+} from "@/lib/exerciseUnits";
 import type { Exercise } from "@/types/database";
-
-const MUSCLE_FILTERS = [
-  "All",
-  "Chest",
-  "Back",
-  "Shoulders",
-  "Legs",
-  "Arms",
-  "Core",
-  "Cardio",
-] as const;
-
-const EQUIPMENT_FILTERS = [
-  "All",
-  "Barbell",
-  "Dumbbell",
-  "Cable",
-  "Machine",
-  "Body",
-  "Kettlebell",
-] as const;
 
 export default function ExercisesScreen() {
   const { dict, tMuscle, tEquipment } = useI18n();
@@ -87,34 +70,16 @@ export default function ExercisesScreen() {
     };
   }, []);
 
-  const filteredExercises = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    const eqFilter = selectedEquipment.toLowerCase();
-
-    return exercises.filter((ex) => {
-      if (selectedMuscle === "Cardio") {
-        if (!isCardioExercise(ex)) return false;
-      } else if (
-        selectedMuscle !== "All" &&
-        ex.muscle_group !== selectedMuscle
-      ) {
-        return false;
-      }
-      if (
-        selectedEquipment !== "All" &&
-        !ex.equipment.toLowerCase().includes(eqFilter)
-      ) {
-        return false;
-      }
-      if (!query) return true;
-      return (
-        ex.name.toLowerCase().includes(query) ||
-        ex.equipment.toLowerCase().includes(query) ||
-        ex.muscle_group.toLowerCase().includes(query) ||
-        ex.target_muscles.some((m) => m.toLowerCase().includes(query))
-      );
-    });
-  }, [exercises, search, selectedMuscle, selectedEquipment]);
+  const filteredExercises = useMemo(
+    () =>
+      filterExerciseList(
+        exercises,
+        search,
+        selectedMuscle,
+        selectedEquipment
+      ),
+    [exercises, search, selectedMuscle, selectedEquipment]
+  );
 
   function handleExerciseCreated(created: Exercise) {
     setExercises((prev) =>

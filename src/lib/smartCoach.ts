@@ -1,5 +1,4 @@
-import { en } from "@/i18n/en";
-import { formatTemplate, type Locale } from "@/i18n/LanguageContext";
+import { en, formatTemplate, type Locale } from "@/i18n/en";
 import { vi } from "@/i18n/vi";
 import { isCardioExercise } from "@/lib/exerciseUnits";
 import type {
@@ -280,13 +279,16 @@ export function rankSwapAlternatives(
     current.target_muscles.map((m) => m.toLowerCase())
   );
   const currentEq = current.equipment.toLowerCase();
+  const currentIsCardio = isCardioExercise(current);
 
   return catalog
     .filter(
       (ex) =>
         ex.id !== current.id &&
         !excludeIds.has(ex.id) &&
-        ex.muscle_group === current.muscle_group
+        (currentIsCardio
+          ? isCardioExercise(ex)
+          : !isCardioExercise(ex) && ex.muscle_group === current.muscle_group)
     )
     .map((ex) => {
       let score = 0;

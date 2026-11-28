@@ -2,6 +2,7 @@ import {
   CACHE_KEYS,
   enqueueOfflineOp,
   generateUuid,
+  isPermanentPgError,
   loadCache,
   saveCache,
 } from "@/lib/offlineQueue";
@@ -26,6 +27,13 @@ import type {
 } from "@/types/database";
 
 let exercisesMemoryCache: Exercise[] | null = null;
+const deletedSessionIds = new Set<string>();
+
+export function consumeDeletedSessionIds(): Set<string> {
+  const copy = new Set(deletedSessionIds);
+  deletedSessionIds.clear();
+  return copy;
+}
 
 /**
  * Formats local calendar date as YYYY-MM-DD (avoiding UTC shifts from toISOString()).
@@ -805,7 +813,7 @@ export async function updateExerciseMediaAndTips(
 
 export async function getLastPerformedSets(
   exerciseId: string,
-  excludeSessionId?: string
+  excludeSessionIds?: string | string[]
 ): Promise<SetLog[]> {
   let latestQuery = supabase
     .from("set_logs")
@@ -815,8 +823,16 @@ export async function getLastPerformedSets(
     .order("created_at", { ascending: false })
     .limit(1);
 
-  if (excludeSessionId) {
-    latestQuery = latestQuery.neq("session_id", excludeSessionId);
+  const excluded = Array.isArray(excludeSessionIds)
+    ? excludeSessionIds.filter(Boolean)
+    : excludeSessionIds
+      ? [excludeSessionIds]
+      : [];
+
+  if (excluded.length === 1) {
+    latestQuery = latestQuery.neq("session_id", excluded[0]);
+  } else if (excluded.length > 1) {
+    latestQuery = latestQuery.not("session_id", "in", `(${excluded.join(",")})`);
   }
 
   const { data: latestRow, error: latestError } =
@@ -839,36 +855,62 @@ export async function getLastPerformedSets(
 export async function fetchActiveTodaySession(
   routineId: string,
   sessionDate = getLocalDateString()
-): Promise<{ session: WorkoutSession | null; existingLogs: SetLog[] }> {
+): Promise<{
+  session: WorkoutSession | null;
+  existingLogs: SetLog[];
+  daySessionIds: string[];
+}> {
   try {
-    const { data: existingSession, error: findError } = await supabase
+    const { data: daySessions, error: findError } = await supabase
       .from("workout_sessions")
       .select("*")
       .eq("session_date", sessionDate)
       .eq("routine_id", routineId)
-      .is("completed_at", null)
-      .order("started_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+      .order("started_at", { ascending: true });
 
     if (findError) throw findError;
-    if (!existingSession) return { session: null, existingLogs: [] };
+    const sessions = (daySessions ?? []) as WorkoutSession[];
+    if (sessions.length === 0) {
+      return { session: null, existingLogs: [], daySessionIds: [] };
+    }
+
+    const activeSessions = sessions.filter((s) => s.completed_at === null);
+    const session =
+      activeSessions.length > 0
+        ? activeSessions[activeSessions.length - 1]
+        : sessions[sessions.length - 1];
+    const daySessionIds = sessions.map((s) => s.id);
 
     const { data: logs, error: logsError } = await supabase
       .from("set_logs")
       .select("*")
-      .eq("session_id", existingSession.id)
+      .in("session_id", daySessionIds)
+      .order("created_at", { ascending: true })
       .order("set_number", { ascending: true });
 
     if (logsError) throw logsError;
 
+    const dedupedByExerciseAndSet = new Map<string, SetLog>();
+    for (const rawLog of (logs ?? []) as SetLog[]) {
+      const normalized = normalizeSetLog(rawLog);
+      dedupedByExerciseAndSet.set(
+        `${normalized.exercise_id}__${normalized.set_number}`,
+        normalized
+      );
+    }
+
+    const existingLogs = Array.from(dedupedByExerciseAndSet.values()).sort(
+      (a, b) => a.set_number - b.set_number
+    );
+
     return {
-      session: existingSession as WorkoutSession,
-      existingLogs: ((logs ?? []) as SetLog[]).map(normalizeSetLog),
+      session,
+      existingLogs,
+      daySessionIds,
     };
   } catch (err) {
     console.warn("[api] fetchActiveTodaySession failed:", err);
-    return { session: null, existingLogs: [] };
+    return { session: null, existingLogs: [], daySessionIds: [] };
   }
 }
 
@@ -945,6 +987,7 @@ export async function upsertSetLog(payload: SetLog): Promise<SetLog> {
     if (error) throw error;
     return normalizeSetLog(data as SetLog);
   } catch (err) {
+    if (isPermanentPgError(err)) throw err;
     console.warn("[api] upsertSetLog failed, queueing offline op:", err);
     await enqueueOfflineOp({
       type: "upsert_set",
@@ -1033,6 +1076,7 @@ export async function deleteWorkoutSession(sessionId: string): Promise<void> {
     .eq("id", sessionId);
 
   if (error) throw error;
+  deletedSessionIds.add(sessionId);
 }
 
 interface RawPRLogRow {

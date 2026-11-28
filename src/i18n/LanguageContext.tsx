@@ -8,10 +8,15 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { en, type TranslationSchema } from "@/i18n/en";
+import {
+  en,
+  formatTemplate,
+  type Locale,
+  type TranslationSchema,
+} from "@/i18n/en";
 import { vi } from "@/i18n/vi";
 
-export type Locale = "en" | "vi";
+export { formatTemplate, type Locale };
 
 const LANGUAGE_STORAGE_KEY = "@app_language";
 
@@ -39,15 +44,6 @@ function getDeviceLocale(): Locale {
   } catch {
     return "en";
   }
-}
-
-export function formatTemplate(
-  template: string,
-  vars: Record<string, string | number>
-): string {
-  return template.replace(/\{(\w+)\}/g, (match, key: string) =>
-    key in vars ? String(vars[key]) : match
-  );
 }
 
 const LanguageContext = createContext<LanguageContextValue | null>(null);

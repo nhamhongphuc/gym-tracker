@@ -2,7 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { Pressable, Text, TextInput, View } from "react-native";
 import { Colors } from "@/constants/theme";
 import { useI18n } from "@/i18n/LanguageContext";
-import { formatSetSummary } from "@/lib/exerciseUnits";
+import { formatSetSummary, sanitizeDecimalInput } from "@/lib/exerciseUnits";
 import type { DraftSetRow, SetType } from "@/types/database";
 
 interface SetRowProps {
@@ -14,6 +14,7 @@ interface SetRowProps {
   onChangeReps: (val: string) => void;
   onChangeSpeed?: (val: string) => void;
   onChangeIncline?: (val: string) => void;
+  onBlurRow?: () => void;
   onToggleComplete: () => void;
 }
 
@@ -51,6 +52,7 @@ export function SetRow({
   onChangeReps,
   onChangeSpeed,
   onChangeIncline,
+  onBlurRow,
   onToggleComplete,
 }: SetRowProps) {
   const { dict } = useI18n();
@@ -125,9 +127,8 @@ export function SetRow({
         {/* KG / KM Column */}
         <TextInput
           value={row.weight_kg}
-          onChangeText={(val) =>
-            onChangeWeight(val.replace(",", ".").replace(/[^0-9.]/g, ""))
-          }
+          onChangeText={(val) => onChangeWeight(sanitizeDecimalInput(val))}
+          onBlur={onBlurRow}
           placeholder={
             row.prev_weight_kg !== undefined ? String(row.prev_weight_kg) : "0"
           }
@@ -143,6 +144,7 @@ export function SetRow({
         <TextInput
           value={row.reps}
           onChangeText={(val) => onChangeReps(val.replace(/[^0-9]/g, ""))}
+          onBlur={onBlurRow}
           placeholder={row.prev_reps !== undefined ? String(row.prev_reps) : "0"}
           placeholderTextColor={Colors.textMuted}
           keyboardType="number-pad"
@@ -180,9 +182,8 @@ export function SetRow({
             </Text>
             <TextInput
               value={row.speed_kmh ?? ""}
-              onChangeText={(val) =>
-                onChangeSpeed?.(val.replace(",", ".").replace(/[^0-9.]/g, ""))
-              }
+              onChangeText={(val) => onChangeSpeed?.(sanitizeDecimalInput(val))}
+              onBlur={onBlurRow}
               placeholder={
                 row.prev_speed_kmh != null ? String(row.prev_speed_kmh) : "0"
               }
@@ -202,8 +203,9 @@ export function SetRow({
             <TextInput
               value={row.incline_pct ?? ""}
               onChangeText={(val) =>
-                onChangeIncline?.(val.replace(",", ".").replace(/[^0-9.]/g, ""))
+                onChangeIncline?.(sanitizeDecimalInput(val))
               }
+              onBlur={onBlurRow}
               placeholder={
                 row.prev_incline_pct != null
                   ? String(row.prev_incline_pct)
