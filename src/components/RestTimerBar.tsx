@@ -69,22 +69,28 @@ export function RestTimerBar({
           )}
         </View>
 
-        <View className="flex-row items-center gap-1.5">
+        <View className="flex-row items-center gap-2">
           <Pressable
             onPress={() => onAdjust(-15)}
-            className="min-h-11 min-w-11 px-2.5 rounded-xl bg-surface border border-border items-center justify-center"
+            accessibilityRole="button"
+            accessibilityLabel="Subtract 15 seconds"
+            className="min-h-11 min-w-11 px-2.5 rounded-xl bg-surface border border-border items-center justify-center active:opacity-75"
           >
             <Text className="text-text-primary text-xs font-bold">-15s</Text>
           </Pressable>
           <Pressable
             onPress={() => onAdjust(15)}
-            className="min-h-11 min-w-11 px-2.5 rounded-xl bg-surface border border-border items-center justify-center"
+            accessibilityRole="button"
+            accessibilityLabel="Add 15 seconds"
+            className="min-h-11 min-w-11 px-2.5 rounded-xl bg-surface border border-border items-center justify-center active:opacity-75"
           >
             <Text className="text-text-primary text-xs font-bold">+15s</Text>
           </Pressable>
           <Pressable
             onPress={onSkip}
-            className="min-h-11 min-w-11 px-3.5 rounded-xl bg-primary items-center justify-center"
+            accessibilityRole="button"
+            accessibilityLabel="Skip rest timer"
+            className="min-h-11 min-w-11 px-3.5 rounded-xl bg-primary items-center justify-center active:opacity-75"
           >
             <Text className="text-black text-xs font-extrabold">
               {dict.restTimer.skip}

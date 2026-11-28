@@ -21,6 +21,7 @@ import {
   fetchExercisePRStats,
   updateExerciseMediaAndTips,
 } from "@/lib/api";
+import { formatSetSummary, isCardioExercise } from "@/lib/exerciseUnits";
 import type { Exercise, ExercisePRStats } from "@/types/database";
 
 export default function ExerciseDetailModal() {
@@ -59,6 +60,7 @@ export default function ExerciseDetailModal() {
           fetchExerciseById(id),
           fetchExercisePRStats(id).catch(() => ({
             maxWeightKg: 0,
+            maxReps: 0,
             bestEstimated1RM: 0,
             recentSessions: [],
           })),
@@ -154,13 +156,20 @@ export default function ExerciseDetailModal() {
     }
   }
 
-  const youtubeSearchUrl = exercise
+  const searchQuery = exercise
+    ? locale === "vi"
+      ? `hướng dẫn tập ${exercise.name} đúng kỹ thuật`
+      : `${exercise.name} proper form tutorial`
+    : "";
+  const youtubeSearchUrl = searchQuery
     ? `https://www.youtube.com/results?search_query=${encodeURIComponent(
-        locale === "vi"
-          ? `hướng dẫn tập ${exercise.name} đúng kỹ thuật`
-          : `${exercise.name} proper form tutorial`
+        searchQuery
       )}`
     : "";
+  const tiktokSearchUrl = searchQuery
+    ? `https://www.tiktok.com/search?q=${encodeURIComponent(searchQuery)}`
+    : "";
+  const isCardio = isCardioExercise(exercise);
 
   const viInstructions = exercise?.instructions_vi ?? [];
   const hasViInstructions = viInstructions.length > 0;
@@ -250,7 +259,8 @@ export default function ExerciseDetailModal() {
                           setAutoToggle(false);
                           setFrameIndex((prev) => (prev === 0 ? 1 : 0));
                         }}
-                        className="min-h-9 px-3 rounded-lg bg-surface-elevated border border-border items-center justify-center"
+                        accessibilityRole="button"
+                        className="min-h-11 px-3.5 rounded-lg bg-surface-elevated border border-border items-center justify-center active:opacity-75"
                       >
                         <Text className="text-text-primary text-xs font-semibold">
                           {dict.exerciseDetail.switchFrame}
@@ -279,7 +289,8 @@ export default function ExerciseDetailModal() {
                 <View className="flex-row items-center gap-2">
                   <Pressable
                     onPress={() => openExternalUrl(exercise.video_url!)}
-                    className="flex-1 min-h-11 px-4 rounded-xl bg-accent flex-row items-center justify-center gap-2"
+                    accessibilityRole="button"
+                    className="flex-1 min-h-11 px-4 rounded-xl bg-accent flex-row items-center justify-center gap-2 active:opacity-75"
                   >
                     <Ionicons name="play-circle" size={20} color="#FFFFFF" />
                     <Text className="text-text-primary text-sm font-bold">
@@ -291,7 +302,9 @@ export default function ExerciseDetailModal() {
                       setVideoDraft(exercise.video_url ?? "");
                       setEditingVideo(true);
                     }}
-                    className="min-h-11 min-w-11 rounded-xl bg-surface-elevated border border-border items-center justify-center"
+                    accessibilityRole="button"
+                    accessibilityLabel="Edit video link"
+                    className="min-h-11 min-w-11 rounded-xl bg-surface-elevated border border-border items-center justify-center active:opacity-75"
                   >
                     <Ionicons
                       name="create-outline"
@@ -315,7 +328,8 @@ export default function ExerciseDetailModal() {
                   <View className="flex-row justify-end gap-2">
                     <Pressable
                       onPress={() => setEditingVideo(false)}
-                      className="min-h-10 px-4 rounded-xl bg-surface-elevated items-center justify-center"
+                      accessibilityRole="button"
+                      className="min-h-11 px-4 rounded-xl bg-surface-elevated items-center justify-center active:opacity-75"
                     >
                       <Text className="text-text-secondary text-xs font-semibold">
                         {dict.common.cancel}
@@ -324,7 +338,8 @@ export default function ExerciseDetailModal() {
                     <Pressable
                       onPress={handleSaveVideo}
                       disabled={savingVideo}
-                      className="min-h-10 px-4 rounded-xl bg-primary items-center justify-center"
+                      accessibilityRole="button"
+                      className="min-h-11 px-4 rounded-xl bg-primary items-center justify-center active:opacity-75"
                     >
                       <Text className="text-black text-xs font-extrabold">
                         {savingVideo
@@ -337,7 +352,8 @@ export default function ExerciseDetailModal() {
               ) : (
                 <Pressable
                   onPress={() => setEditingVideo(true)}
-                  className="min-h-11 px-4 rounded-xl bg-surface-elevated border border-border flex-row items-center justify-center gap-2"
+                  accessibilityRole="button"
+                  className="min-h-11 px-4 rounded-xl bg-surface-elevated border border-border flex-row items-center justify-center gap-2 active:opacity-75"
                 >
                   <Ionicons
                     name="add-circle-outline"
@@ -350,15 +366,42 @@ export default function ExerciseDetailModal() {
                 </Pressable>
               )}
 
-              <Pressable
-                onPress={() => openExternalUrl(youtubeSearchUrl)}
-                className="min-h-11 px-4 rounded-xl bg-surface-elevated border border-border flex-row items-center justify-center gap-2"
-              >
-                <Ionicons name="logo-youtube" size={18} color={Colors.danger} />
-                <Text className="text-text-primary text-sm font-medium">
-                  {dict.exerciseDetail.searchYoutube}
-                </Text>
-              </Pressable>
+              <View className="flex-row gap-2">
+                <Pressable
+                  onPress={() => openExternalUrl(youtubeSearchUrl)}
+                  accessibilityRole="button"
+                  className="flex-1 min-h-11 px-3 rounded-xl bg-surface-elevated border border-border flex-row items-center justify-center gap-2 active:opacity-75"
+                >
+                  <Ionicons
+                    name="logo-youtube"
+                    size={18}
+                    color={Colors.danger}
+                  />
+                  <Text
+                    numberOfLines={1}
+                    className="text-text-primary text-xs font-bold"
+                  >
+                    {dict.exerciseDetail.searchYoutube}
+                  </Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => openExternalUrl(tiktokSearchUrl)}
+                  accessibilityRole="button"
+                  className="flex-1 min-h-11 px-3 rounded-xl bg-surface-elevated border border-border flex-row items-center justify-center gap-2 active:opacity-75"
+                >
+                  <Ionicons
+                    name="logo-tiktok"
+                    size={17}
+                    color={Colors.textPrimary}
+                  />
+                  <Text
+                    numberOfLines={1}
+                    className="text-text-primary text-xs font-bold"
+                  >
+                    {dict.exerciseDetail.searchTiktok}
+                  </Text>
+                </Pressable>
+              </View>
             </View>
 
             {/* 3. Muscle Breakdown */}
@@ -419,7 +462,8 @@ export default function ExerciseDetailModal() {
                       setTipsDraft(exercise.tips ?? "");
                       setEditingTips(true);
                     }}
-                    className="min-h-9 px-3 rounded-lg bg-warning/15 items-center justify-center"
+                    accessibilityRole="button"
+                    className="min-h-11 px-3.5 rounded-lg bg-warning/15 items-center justify-center active:opacity-75"
                   >
                     <Text className="text-warning text-xs font-semibold">
                       {exercise.tips
@@ -443,7 +487,8 @@ export default function ExerciseDetailModal() {
                   <View className="flex-row justify-end gap-2">
                     <Pressable
                       onPress={() => setEditingTips(false)}
-                      className="min-h-10 px-4 rounded-xl bg-surface items-center justify-center"
+                      accessibilityRole="button"
+                      className="min-h-11 px-4 rounded-xl bg-surface items-center justify-center active:opacity-75"
                     >
                       <Text className="text-text-secondary text-xs font-semibold">
                         {dict.common.cancel}
@@ -452,7 +497,8 @@ export default function ExerciseDetailModal() {
                     <Pressable
                       onPress={handleSaveTips}
                       disabled={savingTips}
-                      className="min-h-10 px-4 rounded-xl bg-warning items-center justify-center"
+                      accessibilityRole="button"
+                      className="min-h-11 px-4 rounded-xl bg-warning items-center justify-center active:opacity-75"
                     >
                       <Text className="text-black text-xs font-extrabold">
                         {savingTips
@@ -481,7 +527,9 @@ export default function ExerciseDetailModal() {
                   exercise.instructions.length > 0 && (
                     <Pressable
                       onPress={() => setShowOriginalSteps((prev) => !prev)}
-                      className="min-h-8 px-2.5 rounded-lg bg-surface-elevated border border-border items-center justify-center"
+                      hitSlop={4}
+                      accessibilityRole="button"
+                      className="min-h-10 px-3 rounded-lg bg-surface-elevated border border-border items-center justify-center active:opacity-75"
                     >
                       <Text className="text-text-secondary text-[11px] font-bold">
                         {showOriginalSteps
@@ -503,7 +551,10 @@ export default function ExerciseDetailModal() {
                     className="flex-row gap-3 p-3 rounded-xl bg-surface-elevated border border-border"
                   >
                     <View className="w-6 h-6 rounded-full bg-primary-subtle items-center justify-center mt-0.5">
-                      <Text className="text-primary text-xs font-bold">
+                      <Text
+                        style={{ fontVariant: ["tabular-nums"] }}
+                        className="text-primary text-xs font-bold"
+                      >
                         {idx + 1}
                       </Text>
                     </View>
@@ -523,26 +574,36 @@ export default function ExerciseDetailModal() {
               <View className="flex-row gap-3">
                 <View className="flex-1 rounded-xl bg-surface-elevated border border-border p-3 items-center">
                   <Text className="text-text-secondary text-xs">
-                    {dict.exerciseDetail.heaviestWeight}
+                    {isCardio
+                      ? dict.exerciseDetail.longestDistance
+                      : dict.exerciseDetail.heaviestWeight}
                   </Text>
                   <Text
                     style={{ fontVariant: ["tabular-nums"] }}
                     className="text-primary text-xl font-bold mt-1"
                   >
-                    {prStats?.maxWeightKg ? `${prStats.maxWeightKg} kg` : "—"}
+                    {prStats?.maxWeightKg
+                      ? `${prStats.maxWeightKg} ${isCardio ? "km" : "kg"}`
+                      : "—"}
                   </Text>
                 </View>
                 <View className="flex-1 rounded-xl bg-surface-elevated border border-border p-3 items-center">
                   <Text className="text-text-secondary text-xs">
-                    {dict.exerciseDetail.est1RM}
+                    {isCardio
+                      ? dict.exerciseDetail.longestDuration
+                      : dict.exerciseDetail.est1RM}
                   </Text>
                   <Text
                     style={{ fontVariant: ["tabular-nums"] }}
                     className="text-accent text-xl font-bold mt-1"
                   >
-                    {prStats?.bestEstimated1RM
-                      ? `${prStats.bestEstimated1RM} kg`
-                      : "—"}
+                    {isCardio
+                      ? prStats?.maxReps
+                        ? `${prStats.maxReps} min`
+                        : "—"
+                      : prStats?.bestEstimated1RM
+                        ? `${prStats.bestEstimated1RM} kg`
+                        : "—"}
                   </Text>
                 </View>
               </View>
@@ -568,7 +629,14 @@ export default function ExerciseDetailModal() {
                               style={{ fontVariant: ["tabular-nums"] }}
                               className="text-text-primary text-xs font-medium"
                             >
-                              #{s.set_number}: {s.weight_kg}kg × {s.reps}
+                              #{s.set_number}:{" "}
+                              {formatSetSummary(
+                                s.weight_kg,
+                                s.reps,
+                                isCardio,
+                                s.speed_kmh,
+                                s.incline_pct
+                              )}
                             </Text>
                           </View>
                         ))}

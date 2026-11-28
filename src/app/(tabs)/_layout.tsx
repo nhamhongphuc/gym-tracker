@@ -11,12 +11,12 @@ export default function TabsLayout() {
       screenOptions={{
         headerShown: false,
         tabBarStyle: {
-          backgroundColor: "#0D0D10",
+          backgroundColor: Colors.surface,
           borderTopColor: Colors.border,
           borderTopWidth: 1,
         },
         tabBarActiveTintColor: Colors.primary,
-        tabBarInactiveTintColor: Colors.textSecondary,
+        tabBarInactiveTintColor: Colors.textMuted,
         sceneStyle: { backgroundColor: Colors.background },
       }}
     >
@@ -28,7 +28,7 @@ export default function TabsLayout() {
             <Ionicons
               name={focused ? "barbell" : "barbell-outline"}
               size={size}
-              color={focused ? Colors.primary : Colors.textSecondary}
+              color={focused ? Colors.primary : Colors.textMuted}
             />
           ),
         }}
@@ -41,7 +41,7 @@ export default function TabsLayout() {
             <Ionicons
               name={focused ? "calendar" : "calendar-outline"}
               size={size}
-              color={focused ? Colors.primary : Colors.textSecondary}
+              color={focused ? Colors.primary : Colors.textMuted}
             />
           ),
         }}
@@ -54,7 +54,7 @@ export default function TabsLayout() {
             <Ionicons
               name={focused ? "library" : "library-outline"}
               size={size}
-              color={focused ? Colors.primary : Colors.textSecondary}
+              color={focused ? Colors.primary : Colors.textMuted}
             />
           ),
         }}
@@ -67,7 +67,7 @@ export default function TabsLayout() {
             <Ionicons
               name={focused ? "stats-chart" : "stats-chart-outline"}
               size={size}
-              color={focused ? Colors.primary : Colors.textSecondary}
+              color={focused ? Colors.primary : Colors.textMuted}
             />
           ),
         }}

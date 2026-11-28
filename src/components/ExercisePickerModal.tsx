@@ -15,6 +15,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Colors, Shadows } from "@/constants/theme";
 import { formatTemplate, useI18n } from "@/i18n/LanguageContext";
 import { fetchExercises } from "@/lib/api";
+import { isCardioExercise } from "@/lib/exerciseUnits";
 import type { Exercise } from "@/types/database";
 
 const MUSCLE_FILTERS = [
@@ -43,6 +44,7 @@ interface ExercisePickerModalProps {
   onClose: () => void;
   onSelect: (exercise: Exercise) => Promise<void> | void;
   existingExerciseIds?: Set<string>;
+  title?: string;
 }
 
 export function ExercisePickerModal({
@@ -50,6 +52,7 @@ export function ExercisePickerModal({
   onClose,
   onSelect,
   existingExerciseIds,
+  title,
 }: ExercisePickerModalProps) {
   const { dict, tMuscle, tEquipment } = useI18n();
   const [exercises, setExercises] = useState<Exercise[]>([]);
@@ -92,7 +95,12 @@ export function ExercisePickerModal({
     const eqFilter = selectedEquipment.toLowerCase();
 
     return exercises.filter((ex) => {
-      if (selectedMuscle !== "All" && ex.muscle_group !== selectedMuscle) {
+      if (selectedMuscle === "Cardio") {
+        if (!isCardioExercise(ex)) return false;
+      } else if (
+        selectedMuscle !== "All" &&
+        ex.muscle_group !== selectedMuscle
+      ) {
         return false;
       }
       if (
@@ -135,11 +143,12 @@ export function ExercisePickerModal({
         {/* Header */}
         <View className="flex-row items-center justify-between px-4 py-3 bg-surface border-b border-border">
           <Text className="text-text-primary text-base font-extrabold">
-            {dict.pickerModal.title}
+            {title ?? dict.pickerModal.title}
           </Text>
           <Pressable
             onPress={onClose}
-            className="min-h-11 min-w-11 items-center justify-center px-2"
+            accessibilityRole="button"
+            className="min-h-11 min-w-11 items-center justify-center px-2 active:opacity-75"
           >
             <Text className="text-primary text-base font-bold">
               {dict.common.done}
@@ -162,7 +171,9 @@ export function ExercisePickerModal({
             {search.length > 0 && (
               <Pressable
                 onPress={() => setSearch("")}
-                className="min-h-11 min-w-11 items-center justify-center"
+                accessibilityRole="button"
+                accessibilityLabel="Clear search"
+                className="min-h-11 min-w-11 items-center justify-center active:opacity-75"
               >
                 <Ionicons
                   name="close-circle"
@@ -184,7 +195,9 @@ export function ExercisePickerModal({
                 <Pressable
                   key={muscle}
                   onPress={() => setSelectedMuscle(muscle)}
-                  className={`min-h-9 px-3.5 rounded-full border items-center justify-center ${
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: active }}
+                  className={`min-h-11 px-3.5 rounded-full border items-center justify-center active:opacity-75 ${
                     active
                       ? "bg-primary border-primary"
                       : "bg-surface-elevated border-border"
@@ -213,7 +226,10 @@ export function ExercisePickerModal({
                 <Pressable
                   key={eq}
                   onPress={() => setSelectedEquipment(eq)}
-                  className={`min-h-8 px-3 rounded-lg border items-center justify-center ${
+                  hitSlop={{ top: 4, bottom: 4 }}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: active }}
+                  className={`min-h-10 px-3 rounded-lg border items-center justify-center active:opacity-75 ${
                     active
                       ? "bg-accent/20 border-accent"
                       : "bg-background border-border"
@@ -311,7 +327,8 @@ export function ExercisePickerModal({
                   <Pressable
                     onPress={() => handleSelect(item)}
                     disabled={isAdded || isBusy}
-                    className={`min-h-11 px-3.5 rounded-xl flex-row items-center justify-center gap-1 ${
+                    accessibilityRole="button"
+                    className={`min-h-11 px-3.5 rounded-xl flex-row items-center justify-center gap-1 active:opacity-75 ${
                       isAdded
                         ? "bg-primary-subtle border border-primary/40"
                         : "bg-primary"

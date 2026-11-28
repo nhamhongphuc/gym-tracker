@@ -43,6 +43,14 @@ function normalizeSetLog(row: SetLog): SetLog {
     set_number: Number(row.set_number),
     weight_kg: Number(row.weight_kg),
     reps: Number(row.reps),
+    speed_kmh:
+      row.speed_kmh !== null && row.speed_kmh !== undefined
+        ? Number(row.speed_kmh)
+        : null,
+    incline_pct:
+      row.incline_pct !== null && row.incline_pct !== undefined
+        ? Number(row.incline_pct)
+        : null,
     rpe: row.rpe !== null && row.rpe !== undefined ? Number(row.rpe) : null,
   };
 }
@@ -1033,6 +1041,8 @@ interface RawPRLogRow {
   set_type: SetType;
   weight_kg: number | string;
   reps: number | string;
+  speed_kmh?: number | string | null;
+  incline_pct?: number | string | null;
   workout_sessions: { session_date: string } | { session_date: string }[] | null;
 }
 
@@ -1042,7 +1052,7 @@ export async function fetchExercisePRStats(
   const { data, error } = await supabase
     .from("set_logs")
     .select(
-      "session_id, set_number, set_type, weight_kg, reps, workout_sessions(session_date)"
+      "session_id, set_number, set_type, weight_kg, reps, speed_kmh, incline_pct, workout_sessions(session_date)"
     )
     .eq("exercise_id", exerciseId)
     .eq("is_completed", true)
@@ -1051,6 +1061,7 @@ export async function fetchExercisePRStats(
   if (error) throw error;
 
   let maxWeightKg = 0;
+  let maxReps = 0;
   let bestEstimated1RM = 0;
 
   const sessionMap = new Map<
@@ -1061,6 +1072,8 @@ export async function fetchExercisePRStats(
         set_number: number;
         weight_kg: number;
         reps: number;
+        speed_kmh?: number | null;
+        incline_pct?: number | null;
         set_type: SetType;
       }[];
     }
@@ -1069,10 +1082,21 @@ export async function fetchExercisePRStats(
   for (const row of (data ?? []) as RawPRLogRow[]) {
     const weight = Number(row.weight_kg);
     const reps = Number(row.reps);
+    const speedKmh =
+      row.speed_kmh !== null && row.speed_kmh !== undefined
+        ? Number(row.speed_kmh)
+        : null;
+    const inclinePct =
+      row.incline_pct !== null && row.incline_pct !== undefined
+        ? Number(row.incline_pct)
+        : null;
     const setNumber = Number(row.set_number);
 
     if (weight > maxWeightKg) {
       maxWeightKg = weight;
+    }
+    if (reps > maxReps) {
+      maxReps = reps;
     }
 
     if (weight > 0 && reps > 0) {
@@ -1098,6 +1122,8 @@ export async function fetchExercisePRStats(
       set_number: setNumber,
       weight_kg: weight,
       reps,
+      speed_kmh: speedKmh,
+      incline_pct: inclinePct,
       set_type: row.set_type,
     });
   }
@@ -1109,6 +1135,7 @@ export async function fetchExercisePRStats(
 
   return {
     maxWeightKg,
+    maxReps,
     bestEstimated1RM,
     recentSessions,
   };

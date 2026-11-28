@@ -20,6 +20,7 @@ import {
   fetchWorkoutHistory,
   getLocalDateString,
 } from "@/lib/api";
+import { formatSetSummary, isCardioExercise } from "@/lib/exerciseUnits";
 import { computeMuscleAnalytics } from "@/lib/smartCoach";
 import type { SetLog, WorkoutSession } from "@/types/database";
 
@@ -71,10 +72,10 @@ function formatDuration(startedAt: string, completedAt: string | null): string {
 
 function groupLogsByExercise(
   logs: NonNullable<WorkoutSession["set_logs"]>
-): { exerciseId: string; name: string; sets: SetLog[] }[] {
+): { exerciseId: string; name: string; isCardio: boolean; sets: SetLog[] }[] {
   const map = new Map<
     string,
-    { exerciseId: string; name: string; sets: SetLog[] }
+    { exerciseId: string; name: string; isCardio: boolean; sets: SetLog[] }
   >();
 
   for (const log of logs) {
@@ -84,6 +85,7 @@ function groupLogsByExercise(
       group = {
         exerciseId: log.exercise_id,
         name: log.exercise?.name ?? "Exercise",
+        isCardio: isCardioExercise(log.exercise),
         sets: [],
       };
       map.set(log.exercise_id, group);
@@ -147,7 +149,8 @@ export default function HistoryScreen() {
 
       for (const log of session.set_logs ?? []) {
         if (!log.is_completed) continue;
-        const vol = log.weight_kg * log.reps;
+        const isCardio = isCardioExercise(log.exercise);
+        const vol = isCardio ? 0 : log.weight_kg * log.reps;
         if (inMonth) monthVolumeKg += vol;
         if (inWeek) {
           weekSets++;
@@ -168,7 +171,10 @@ export default function HistoryScreen() {
     const volumeByDate = new Map<string, number>();
     for (const session of sessions) {
       const sessionVol = (session.set_logs ?? []).reduce(
-        (sum, l) => (l.is_completed ? sum + l.weight_kg * l.reps : sum),
+        (sum, l) =>
+          l.is_completed && !isCardioExercise(l.exercise)
+            ? sum + l.weight_kg * l.reps
+            : sum,
         0
       );
       volumeByDate.set(
@@ -253,7 +259,10 @@ export default function HistoryScreen() {
       <View className="px-4 pt-2 pb-3 bg-surface border-b border-border gap-3">
         <View className="flex-row items-center justify-between gap-2">
           <View className="flex-1">
-            <Text className="text-text-secondary text-xs font-semibold">
+            <Text
+              style={{ fontVariant: ["tabular-nums"] }}
+              className="text-text-secondary text-xs font-semibold"
+            >
               {sessions.length} {dict.history.totalLogsSuffix}
             </Text>
             <Text
@@ -269,7 +278,9 @@ export default function HistoryScreen() {
         <View className="flex-row p-1 rounded-xl bg-background border border-border">
           <Pressable
             onPress={() => setSegment("overview")}
-            className={`flex-1 min-h-10 rounded-lg items-center justify-center ${
+            accessibilityRole="button"
+            accessibilityState={{ selected: segment === "overview" }}
+            className={`flex-1 min-h-11 rounded-lg items-center justify-center active:opacity-75 ${
               segment === "overview" ? "bg-primary" : ""
             }`}
           >
@@ -283,7 +294,9 @@ export default function HistoryScreen() {
           </Pressable>
           <Pressable
             onPress={() => setSegment("muscles")}
-            className={`flex-1 min-h-10 rounded-lg items-center justify-center ${
+            accessibilityRole="button"
+            accessibilityState={{ selected: segment === "muscles" }}
+            className={`flex-1 min-h-11 rounded-lg items-center justify-center active:opacity-75 ${
               segment === "muscles" ? "bg-primary" : ""
             }`}
           >
@@ -317,7 +330,8 @@ export default function HistoryScreen() {
           </Text>
           <Pressable
             onPress={loadHistory}
-            className="min-h-11 px-5 rounded-xl bg-primary items-center justify-center"
+            accessibilityRole="button"
+            className="min-h-11 px-5 rounded-xl bg-primary items-center justify-center active:opacity-75"
           >
             <Text className="text-black text-sm font-extrabold">
               {dict.common.retry}
@@ -525,7 +539,9 @@ export default function HistoryScreen() {
             const sessionVolume = Math.round(
               (item.set_logs ?? []).reduce(
                 (sum, log) =>
-                  log.is_completed ? sum + log.weight_kg * log.reps : sum,
+                  log.is_completed && !isCardioExercise(log.exercise)
+                    ? sum + log.weight_kg * log.reps
+                    : sum,
                 0
               )
             );
@@ -536,11 +552,16 @@ export default function HistoryScreen() {
                   setExpandedId((prev) => (prev === item.id ? null : item.id))
                 }
                 style={Shadows.card}
-                className="rounded-2xl bg-surface border border-border p-4 gap-3"
+                accessibilityRole="button"
+                accessibilityState={{ expanded }}
+                className="rounded-2xl bg-surface border border-border p-4 gap-3 active:opacity-80"
               >
                 <View className="flex-row items-start justify-between gap-2">
                   <View className="flex-1">
-                    <Text className="text-text-secondary text-xs font-semibold">
+                    <Text
+                      style={{ fontVariant: ["tabular-nums"] }}
+                      className="text-text-secondary text-xs font-semibold"
+                    >
                       {item.session_date} •{" "}
                       {formatDuration(item.started_at, item.completed_at)}
                     </Text>
@@ -551,7 +572,9 @@ export default function HistoryScreen() {
 
                   <Pressable
                     onPress={() => confirmDeleteSession(item)}
-                    className="min-h-11 min-w-11 items-center justify-center rounded-xl bg-surface-elevated border border-border"
+                    accessibilityRole="button"
+                    accessibilityLabel={`Delete ${item.plan_name_snapshot} session`}
+                    className="min-h-11 min-w-11 items-center justify-center rounded-xl bg-surface-elevated border border-border active:opacity-75"
                   >
                     <Ionicons
                       name="trash-outline"
@@ -621,7 +644,13 @@ export default function HistoryScreen() {
                               >
                                 #{s.set_number}:{" "}
                                 <Text className="text-text-primary font-bold">
-                                  {s.weight_kg}kg × {s.reps}
+                                  {formatSetSummary(
+                                    s.weight_kg,
+                                    s.reps,
+                                    group.isCardio,
+                                    s.speed_kmh,
+                                    s.incline_pct
+                                  )}
                                 </Text>
                               </Text>
                             </View>

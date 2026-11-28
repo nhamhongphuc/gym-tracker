@@ -18,6 +18,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { ExercisePickerModal } from "@/components/ExercisePickerModal";
 import { LanguageToggle } from "@/components/LanguageToggle";
 import { ProgramManagerModal } from "@/components/ProgramManagerModal";
 import { RestTimerBar } from "@/components/RestTimerBar";
@@ -36,6 +37,7 @@ import {
   saveProgramScheduleState,
   upsertSetLog,
 } from "@/lib/api";
+import { isCardioExercise } from "@/lib/exerciseUnits";
 import {
   CACHE_KEYS,
   flushOfflineQueue,
@@ -84,6 +86,25 @@ function slotSessionKey(dateStr: string, planId: string): string {
   return `${dateStr}__${planId}`;
 }
 
+function buildExtraPlanExercise(
+  planId: string,
+  exercise: Exercise,
+  orderIndex: number
+): PlanExerciseWithDetails {
+  const cardio = isCardioExercise(exercise);
+  return {
+    id: `extra_${exercise.id}`,
+    plan_id: planId,
+    routine_id: planId,
+    exercise_id: exercise.id,
+    order_index: orderIndex,
+    target_sets: cardio ? 1 : 3,
+    target_reps: cardio ? "30m" : "8-12",
+    rest_seconds: cardio ? 0 : 90,
+    exercise,
+  };
+}
+
 function formatElapsed(startedAtIso: string, nowMs: number): string {
   const startMs = new Date(startedAtIso).getTime();
   if (Number.isNaN(startMs)) return "00:00";
@@ -95,6 +116,13 @@ function formatElapsed(startedAtIso: string, nowMs: number): string {
     return `${hrs}:${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
   }
   return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+}
+
+function parseOptionalNumber(raw?: string): number | null {
+  const trimmed = raw?.trim();
+  if (!trimmed) return null;
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function buildDraftRows(
@@ -119,8 +147,14 @@ function buildDraftRows(
       set_type: existing?.set_type ?? prev?.set_type ?? "working",
       weight_kg: existing ? String(existing.weight_kg) : "",
       reps: existing ? String(existing.reps) : "",
+      speed_kmh:
+        existing?.speed_kmh != null ? String(existing.speed_kmh) : "",
+      incline_pct:
+        existing?.incline_pct != null ? String(existing.incline_pct) : "",
       prev_weight_kg: prev?.weight_kg,
       prev_reps: prev?.reps,
+      prev_speed_kmh: prev?.speed_kmh ?? null,
+      prev_incline_pct: prev?.incline_pct ?? null,
       is_completed: Boolean(existing?.is_completed),
       saved_log_id: existing?.id,
     });
@@ -160,6 +194,10 @@ export default function WorkoutScreen() {
   const [swappedExerciseByPeId, setSwappedExerciseByPeId] = useState<
     Record<string, Exercise>
   >({});
+  const [extraExercisesBySlot, setExtraExercisesBySlot] = useState<
+    Record<string, PlanExerciseWithDetails[]>
+  >({});
+  const [extraPickerVisible, setExtraPickerVisible] = useState(false);
 
   const hydratedPlanIdsRef = useRef<Record<string, boolean>>({});
   const sessionPromiseRef = useRef<Record<string, Promise<WorkoutSession>>>({});
@@ -339,6 +377,27 @@ export default function WorkoutScreen() {
   const activeSession = activeSessionKey
     ? sessionsByPlanId[activeSessionKey] ?? null
     : null;
+  const dayExercises = useMemo(
+    () => selectedPlan?.plan_exercises ?? [],
+    [selectedPlan]
+  );
+  const extraExercises = useMemo(
+    () =>
+      activeSessionKey ? extraExercisesBySlot[activeSessionKey] ?? [] : [],
+    [activeSessionKey, extraExercisesBySlot]
+  );
+  const allDayExercises = useMemo(
+    () => [...dayExercises, ...extraExercises],
+    [dayExercises, extraExercises]
+  );
+  const existingDayExerciseIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const pe of allDayExercises) {
+      const sKey = slotPeKey(selectedDateStr, pe.id);
+      ids.add((swappedExerciseByPeId[sKey] ?? pe.exercise).id);
+    }
+    return ids;
+  }, [allDayExercises, swappedExerciseByPeId, selectedDateStr]);
 
   // Update live elapsed workout duration once an active session exists
   useEffect(() => {
@@ -354,13 +413,13 @@ export default function WorkoutScreen() {
     async (plan: WorkoutPlan, dateStr: string) => {
       const exercises = plan.plan_exercises ?? [];
       const sessKey = slotSessionKey(dateStr, plan.id);
-      if (plan.is_rest_day || exercises.length === 0) {
+      if (plan.is_rest_day) {
         hydratedPlanIdsRef.current[sessKey] = true;
         return;
       }
 
       const alreadyHydrated = Boolean(hydratedPlanIdsRef.current[sessKey]);
-      if (!alreadyHydrated) {
+      if (!alreadyHydrated && exercises.length > 0) {
         setHydratingDay(true);
       }
 
@@ -369,15 +428,45 @@ export default function WorkoutScreen() {
           ? { session: null, existingLogs: [] }
           : await fetchActiveTodaySession(plan.id, dateStr);
 
+        let hydratedExtras: PlanExerciseWithDetails[] = [];
         if (!alreadyHydrated) {
           setSessionsByPlanId((prev) => ({
             ...prev,
             [sessKey]: session,
           }));
+
+          const plannedIds = new Set(exercises.map((pe) => pe.exercise_id));
+          const extraIds = Array.from(
+            new Set(
+              existingLogs
+                .map((l) => l.exercise_id)
+                .filter((id) => !plannedIds.has(id))
+            )
+          );
+          if (extraIds.length > 0) {
+            const allCatalog = await fetchExercises().catch(() => []);
+            const byId = new Map(allCatalog.map((ex) => [ex.id, ex]));
+            hydratedExtras = extraIds
+              .map((exId, idx) => {
+                const ex = byId.get(exId);
+                return ex
+                  ? buildExtraPlanExercise(plan.id, ex, 1000 + idx)
+                  : null;
+              })
+              .filter((x): x is PlanExerciseWithDetails => x !== null);
+
+            if (hydratedExtras.length > 0) {
+              setExtraExercisesBySlot((prev) => ({
+                ...prev,
+                [sessKey]: hydratedExtras,
+              }));
+            }
+          }
         }
 
+        const allToHydrate = [...exercises, ...hydratedExtras];
         const prevResults = await Promise.all(
-          exercises.map(async (pe) => {
+          allToHydrate.map(async (pe) => {
             const prevSets = await getLastPerformedSets(
               pe.exercise_id,
               session?.id
@@ -580,7 +669,7 @@ export default function WorkoutScreen() {
     const currentEx =
       swappedExerciseByPeId[targetKey] ?? swapTargetPe.exercise;
     const excludeIds = new Set(
-      (selectedPlan?.plan_exercises ?? []).map((item) => {
+      allDayExercises.map((item) => {
         const itemKey = slotPeKey(selectedDateStr, item.id);
         return (swappedExerciseByPeId[itemKey] ?? item.exercise).id;
       })
@@ -590,7 +679,7 @@ export default function WorkoutScreen() {
     swapTargetPe,
     catalog,
     swappedExerciseByPeId,
-    selectedPlan,
+    allDayExercises,
     selectedDateStr,
   ]);
 
@@ -615,6 +704,8 @@ export default function WorkoutScreen() {
         set_type: nextType,
         weight_kg: parseFloat(row.weight_kg) || 0,
         reps: parseInt(row.reps, 10) || 0,
+        speed_kmh: parseOptionalNumber(row.speed_kmh),
+        incline_pct: parseOptionalNumber(row.incline_pct),
         is_completed: true,
       });
       await refreshPendingCount();
@@ -630,6 +721,12 @@ export default function WorkoutScreen() {
       weight_kg:
         r.prev_weight_kg !== undefined ? String(r.prev_weight_kg) : r.weight_kg,
       reps: r.prev_reps !== undefined ? String(r.prev_reps) : r.reps,
+      speed_kmh:
+        r.prev_speed_kmh != null ? String(r.prev_speed_kmh) : r.speed_kmh,
+      incline_pct:
+        r.prev_incline_pct != null
+          ? String(r.prev_incline_pct)
+          : r.incline_pct,
     }));
   }
 
@@ -662,6 +759,18 @@ export default function WorkoutScreen() {
         : row.prev_reps !== undefined
           ? String(row.prev_reps)
           : "0";
+    const filledSpeedStr =
+      (row.speed_kmh ?? "").trim() !== ""
+        ? row.speed_kmh ?? ""
+        : row.prev_speed_kmh != null
+          ? String(row.prev_speed_kmh)
+          : "";
+    const filledInclineStr =
+      (row.incline_pct ?? "").trim() !== ""
+        ? row.incline_pct ?? ""
+        : row.prev_incline_pct != null
+          ? String(row.prev_incline_pct)
+          : "";
 
     const logId = row.saved_log_id || generateUuid();
 
@@ -669,6 +778,8 @@ export default function WorkoutScreen() {
       ...r,
       weight_kg: filledWeightStr,
       reps: filledRepsStr,
+      speed_kmh: filledSpeedStr,
+      incline_pct: filledInclineStr,
       is_completed: true,
       saved_log_id: logId,
     }));
@@ -685,6 +796,8 @@ export default function WorkoutScreen() {
       set_type: row.set_type,
       weight_kg: parseFloat(filledWeightStr) || 0,
       reps: parseInt(filledRepsStr, 10) || 0,
+      speed_kmh: parseOptionalNumber(filledSpeedStr),
+      incline_pct: parseOptionalNumber(filledInclineStr),
       is_completed: true,
     });
 
@@ -707,8 +820,12 @@ export default function WorkoutScreen() {
         set_type: "working",
         weight_kg: "",
         reps: "",
+        speed_kmh: "",
+        incline_pct: "",
         prev_weight_kg: last?.prev_weight_kg,
         prev_reps: last?.prev_reps,
+        prev_speed_kmh: last?.prev_speed_kmh ?? null,
+        prev_incline_pct: last?.prev_incline_pct ?? null,
         is_completed: false,
       };
       return { ...prev, [sKey]: [...current, newRow] };
@@ -732,17 +849,80 @@ export default function WorkoutScreen() {
     }
   }
 
+  async function handleAddExtraExercise(exercise: Exercise) {
+    if (!selectedPlan || !activeSessionKey) return;
+    if (existingDayExerciseIds.has(exercise.id)) return;
+
+    const extraPe = buildExtraPlanExercise(
+      selectedPlan.id,
+      exercise,
+      1000 + extraExercises.length
+    );
+    const prevSets = await getLastPerformedSets(
+      exercise.id,
+      activeSession?.id
+    ).catch(() => []);
+    const sKey = slotPeKey(selectedDateStr, extraPe.id);
+
+    setExtraExercisesBySlot((prev) => ({
+      ...prev,
+      [activeSessionKey]: [...(prev[activeSessionKey] ?? []), extraPe],
+    }));
+    setDraftsByPeId((prev) => ({
+      ...prev,
+      [sKey]: buildDraftRows(extraPe, exercise.id, [], prevSets),
+    }));
+    setPrevSetsByPeId((prev) => ({
+      ...prev,
+      [sKey]: prevSets,
+    }));
+  }
+
+  async function handleRemoveExtraExercise(pe: PlanExerciseWithDetails) {
+    if (!activeSessionKey) return;
+    const sKey = slotPeKey(selectedDateStr, pe.id);
+    const rows = draftsByPeId[sKey] ?? [];
+    for (const row of rows) {
+      if (row.is_completed && row.saved_log_id) {
+        await deleteSetLog(row.saved_log_id);
+      }
+    }
+
+    setExtraExercisesBySlot((prev) => ({
+      ...prev,
+      [activeSessionKey]: (prev[activeSessionKey] ?? []).filter(
+        (item) => item.id !== pe.id
+      ),
+    }));
+    setDraftsByPeId((prev) => {
+      const next = { ...prev };
+      delete next[sKey];
+      return next;
+    });
+    setPrevSetsByPeId((prev) => {
+      const next = { ...prev };
+      delete next[sKey];
+      return next;
+    });
+    setSwappedExerciseByPeId((prev) => {
+      const next = { ...prev };
+      delete next[sKey];
+      return next;
+    });
+    await refreshPendingCount();
+  }
+
   const completedSetsCount = useMemo(() => {
     if (!selectedPlan) return 0;
     let count = 0;
-    for (const pe of selectedPlan.plan_exercises ?? []) {
+    for (const pe of allDayExercises) {
       const sKey = slotPeKey(selectedDateStr, pe.id);
       for (const row of draftsByPeId[sKey] ?? []) {
         if (row.is_completed) count++;
       }
     }
     return count;
-  }, [selectedPlan, draftsByPeId, selectedDateStr]);
+  }, [selectedPlan, allDayExercises, draftsByPeId, selectedDateStr]);
 
   async function handleAssignRoutineForDate(targetRoutineId: string | "REST") {
     if (!activeProgram) return;
@@ -807,23 +987,28 @@ export default function WorkoutScreen() {
 
       setSessionsByPlanId((prev) => ({ ...prev, [sessKey]: null }));
       hydratedPlanIdsRef.current[sessKey] = false;
+      setExtraExercisesBySlot((prev) => {
+        const next = { ...prev };
+        delete next[sessKey];
+        return next;
+      });
       setDraftsByPeId((prev) => {
         const next = { ...prev };
-        for (const pe of finishedPlan.plan_exercises ?? []) {
+        for (const pe of allDayExercises) {
           delete next[slotPeKey(finishDate, pe.id)];
         }
         return next;
       });
       setPrevSetsByPeId((prev) => {
         const next = { ...prev };
-        for (const pe of finishedPlan.plan_exercises ?? []) {
+        for (const pe of allDayExercises) {
           delete next[slotPeKey(finishDate, pe.id)];
         }
         return next;
       });
       setSwappedExerciseByPeId((prev) => {
         const next = { ...prev };
-        for (const pe of finishedPlan.plan_exercises ?? []) {
+        for (const pe of allDayExercises) {
           delete next[slotPeKey(finishDate, pe.id)];
         }
         return next;
@@ -849,7 +1034,6 @@ export default function WorkoutScreen() {
       : selectedDateStr === addDaysToDateString(todayStr, 1)
         ? dict.workout.tomorrowTag
         : null;
-  const dayExercises = selectedPlan?.plan_exercises ?? [];
 
   if (loading) {
     return (
@@ -884,7 +1068,8 @@ export default function WorkoutScreen() {
           </Text>
           <Pressable
             onPress={loadPlansAndSync}
-            className="min-h-11 px-5 rounded-xl bg-primary items-center justify-center"
+            accessibilityRole="button"
+            className="min-h-11 px-5 rounded-xl bg-primary items-center justify-center active:opacity-75"
           >
             <Text className="text-black text-sm font-extrabold">
               {dict.common.retry}
@@ -898,8 +1083,8 @@ export default function WorkoutScreen() {
   const headerEyebrow = `${shortDateTag.toUpperCase()}${
     relativeDateTag ? ` • ${relativeDateTag}` : ""
   }${
-    !isVirtualRest && selectedPlan && dayExercises.length > 0
-      ? ` • ${dayExercises.length} ${dict.workout.exercisesUpper}`
+    !isVirtualRest && selectedPlan && allDayExercises.length > 0
+      ? ` • ${allDayExercises.length} ${dict.workout.exercisesUpper}`
       : ""
   }`;
 
@@ -914,47 +1099,81 @@ export default function WorkoutScreen() {
     >
       {/* SmartGym Editorial Top Bar */}
       <View className="bg-surface border-b border-border px-4 pt-2 pb-3 gap-3">
+        {/* Top Utility Row */}
         <View className="flex-row items-center justify-between gap-2">
-          <View className="flex-1">
-            <View className="flex-row items-center gap-1.5 mb-1.5 flex-wrap">
+          <View className="flex-1 flex-row items-center gap-2 flex-wrap">
+            <Pressable
+              onPress={() => setProgramModalVisible(true)}
+              hitSlop={6}
+              accessibilityRole="button"
+              accessibilityLabel={`Switch program: ${activeProgram.name}`}
+              className="min-h-9 flex-row items-center gap-1.5 px-2.5 py-1 rounded-full bg-surface-elevated border border-border active:opacity-75"
+            >
+              <Ionicons
+                name={isRolling ? "repeat" : "calendar-outline"}
+                size={12}
+                color={Colors.primary}
+              />
+              <Text
+                numberOfLines={1}
+                className="text-primary text-[11px] font-extrabold max-w-40"
+              >
+                {activeProgram.name}
+              </Text>
+              <Ionicons
+                name="chevron-down"
+                size={12}
+                color={Colors.textSecondary}
+              />
+            </Pressable>
+
+            {selectedDateStr !== todayStr && (
               <Pressable
-                onPress={() => setProgramModalVisible(true)}
-                className="flex-row items-center gap-1.5 px-2.5 py-1 rounded-full bg-surface-elevated border border-border"
+                onPress={() => {
+                  setCompletedBanner(null);
+                  setSelectedDateStr(todayStr);
+                  setWeekMondayStr(getMondayOfDateString(todayStr));
+                }}
+                hitSlop={6}
+                accessibilityRole="button"
+                className="min-h-9 px-2.5 py-1 rounded-full bg-primary-subtle border border-primary/50 items-center justify-center active:opacity-75"
+              >
+                <Text className="text-primary text-[11px] font-extrabold">
+                  {dict.workout.jumpToday}
+                </Text>
+              </Pressable>
+            )}
+          </View>
+
+          <View className="flex-row items-center gap-2">
+            {pendingSyncCount > 0 && (
+              <Pressable
+                onPress={() => handleFlushQueue(false)}
+                disabled={syncingQueue}
+                accessibilityRole="button"
+                accessibilityLabel={`Sync ${pendingSyncCount} pending changes`}
+                className="min-h-11 px-2.5 rounded-full bg-warning/15 border border-warning/50 flex-row items-center gap-1 active:opacity-75"
               >
                 <Ionicons
-                  name={isRolling ? "repeat" : "calendar-outline"}
-                  size={12}
-                  color={Colors.primary}
+                  name="cloud-upload-outline"
+                  size={15}
+                  color={Colors.warning}
                 />
                 <Text
-                  numberOfLines={1}
-                  className="text-primary text-[11px] font-extrabold max-w-40"
+                  style={{ fontVariant: ["tabular-nums"] }}
+                  className="text-warning text-xs font-bold"
                 >
-                  {activeProgram.name}
+                  {syncingQueue ? "..." : `${pendingSyncCount}`}
                 </Text>
-                <Ionicons
-                  name="chevron-down"
-                  size={12}
-                  color={Colors.textSecondary}
-                />
               </Pressable>
+            )}
+            <LanguageToggle />
+          </View>
+        </View>
 
-              {selectedDateStr !== todayStr && (
-                <Pressable
-                  onPress={() => {
-                    setCompletedBanner(null);
-                    setSelectedDateStr(todayStr);
-                    setWeekMondayStr(getMondayOfDateString(todayStr));
-                  }}
-                  className="px-2.5 py-1 rounded-full bg-primary-subtle border border-primary/50"
-                >
-                  <Text className="text-primary text-[11px] font-extrabold">
-                    {dict.workout.jumpToday}
-                  </Text>
-                </Pressable>
-              )}
-            </View>
-
+        {/* Title Row */}
+        <View className="flex-row items-center justify-between gap-2">
+          <View className="flex-1">
             <View className="flex-row items-center gap-2">
               <Text className="text-primary text-[11px] font-extrabold uppercase tracking-wider">
                 {headerEyebrow}
@@ -978,44 +1197,24 @@ export default function WorkoutScreen() {
             </Text>
           </View>
 
-          <View className="flex-row items-center gap-1.5">
-            <LanguageToggle />
-
-            {pendingSyncCount > 0 && (
-              <Pressable
-                onPress={() => handleFlushQueue(false)}
-                disabled={syncingQueue}
-                className="min-h-11 px-2.5 rounded-full bg-warning/15 border border-warning/50 flex-row items-center gap-1"
-              >
-                <Ionicons
-                  name="cloud-upload-outline"
-                  size={15}
-                  color={Colors.warning}
-                />
-                <Text className="text-warning text-xs font-bold">
-                  {syncingQueue ? "..." : `${pendingSyncCount}`}
-                </Text>
-              </Pressable>
-            )}
-
-            <Pressable
-              onPress={() => setFinishModalVisible(true)}
-              disabled={completedSetsCount === 0}
-              className={`min-h-11 px-3.5 rounded-full items-center justify-center ${
-                completedSetsCount > 0
-                  ? "bg-primary"
-                  : "bg-surface-elevated border border-border opacity-45"
+          <Pressable
+            onPress={() => setFinishModalVisible(true)}
+            disabled={completedSetsCount === 0}
+            accessibilityRole="button"
+            className={`min-h-11 px-3.5 rounded-full items-center justify-center active:opacity-75 ${
+              completedSetsCount > 0
+                ? "bg-primary"
+                : "bg-surface-elevated border border-border opacity-45"
+            }`}
+          >
+            <Text
+              className={`text-xs font-extrabold ${
+                completedSetsCount > 0 ? "text-black" : "text-text-secondary"
               }`}
             >
-              <Text
-                className={`text-xs font-extrabold ${
-                  completedSetsCount > 0 ? "text-black" : "text-text-secondary"
-                }`}
-              >
-                {dict.workout.finish}
-              </Text>
-            </Pressable>
-          </View>
+              {dict.workout.finish}
+            </Text>
+          </Pressable>
         </View>
 
         {/* Interactive Date-Aware 7-Day Week Strip with Scheduled Routine Tags */}
@@ -1029,7 +1228,10 @@ export default function WorkoutScreen() {
               );
               setCompletedBanner(null);
             }}
-            className="min-h-11 px-1 items-center justify-center"
+            hitSlop={6}
+            accessibilityRole="button"
+            accessibilityLabel="Previous week"
+            className="min-h-11 min-w-11 items-center justify-center active:opacity-75"
           >
             <Ionicons
               name="chevron-back"
@@ -1066,7 +1268,10 @@ export default function WorkoutScreen() {
                     setCompletedBanner(null);
                     setSelectedDateStr(cell.dateStr);
                   }}
-                  className="flex-1 min-h-11 items-center gap-0.5"
+                  accessibilityRole="button"
+                  accessibilityLabel={`${weekdayMeta.full} ${cell.dayOfMonth}, ${cellTag}`}
+                  accessibilityState={{ selected: isSelected }}
+                  className="flex-1 min-h-11 items-center gap-0.5 active:opacity-75"
                 >
                   <Text className="text-[10px] font-bold text-text-muted">
                     {weekdayMeta.letter}
@@ -1115,7 +1320,10 @@ export default function WorkoutScreen() {
               );
               setCompletedBanner(null);
             }}
-            className="min-h-11 px-1 items-center justify-center"
+            hitSlop={6}
+            accessibilityRole="button"
+            accessibilityLabel="Next week"
+            className="min-h-11 min-w-11 items-center justify-center active:opacity-75"
           >
             <Ionicons
               name="chevron-forward"
@@ -1141,7 +1349,10 @@ export default function WorkoutScreen() {
                   <Pressable
                     key={sc}
                     onPress={() => setAssignScopeOverride(sc)}
-                    className={`px-2.5 py-1 rounded-full ${
+                    hitSlop={6}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: active }}
+                    className={`min-h-9 px-3 items-center justify-center rounded-full active:opacity-75 ${
                       active ? "bg-accent" : ""
                     }`}
                   >
@@ -1177,7 +1388,9 @@ export default function WorkoutScreen() {
                 <Pressable
                   key={routine.id}
                   onPress={() => handleAssignRoutineForDate(routine.id)}
-                  className={`min-h-9 px-3.5 rounded-full border items-center justify-center ${
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: active }}
+                  className={`min-h-11 px-3.5 rounded-full border items-center justify-center active:opacity-75 ${
                     active
                       ? "bg-primary border-primary"
                       : "bg-surface-elevated border-border"
@@ -1196,7 +1409,9 @@ export default function WorkoutScreen() {
 
             <Pressable
               onPress={() => handleAssignRoutineForDate("REST")}
-              className={`min-h-9 px-3.5 rounded-full border flex-row items-center gap-1.5 ${
+              accessibilityRole="button"
+              accessibilityState={{ selected: isVirtualRest }}
+              className={`min-h-11 px-3.5 rounded-full border flex-row items-center gap-1.5 active:opacity-75 ${
                 isVirtualRest
                   ? "bg-primary border-primary"
                   : "bg-surface-elevated border-border"
@@ -1270,7 +1485,8 @@ export default function WorkoutScreen() {
               </View>
               <Pressable
                 onPress={() => router.push("/(tabs)/history")}
-                className="min-h-10 px-3.5 rounded-full bg-primary items-center justify-center"
+                accessibilityRole="button"
+                className="min-h-11 px-3.5 rounded-full bg-primary items-center justify-center active:opacity-75"
               >
                 <Text className="text-black text-xs font-extrabold">
                   {dict.workout.viewHistory}
@@ -1319,7 +1535,7 @@ export default function WorkoutScreen() {
                 {dict.workout.loadingTargets}
               </Text>
             </View>
-          ) : dayExercises.length === 0 ? (
+          ) : allDayExercises.length === 0 ? (
             <View
               style={Shadows.card}
               className="rounded-2xl bg-surface border border-border p-6 items-center gap-3 mt-4"
@@ -1338,17 +1554,31 @@ export default function WorkoutScreen() {
               </Text>
               <Pressable
                 onPress={() => router.push("/(tabs)/plan")}
-                className="min-h-11 px-5 rounded-full bg-primary items-center justify-center mt-1"
+                accessibilityRole="button"
+                className="min-h-11 px-5 rounded-full bg-primary items-center justify-center mt-1 active:opacity-75"
               >
                 <Text className="text-black text-sm font-extrabold">
                   {dict.workout.openPlanBuilder}
                 </Text>
               </Pressable>
+              <Pressable
+                onPress={() => setExtraPickerVisible(true)}
+                accessibilityRole="button"
+                className="min-h-11 px-5 rounded-full bg-surface-elevated border border-border flex-row items-center justify-center gap-1.5 active:opacity-75"
+              >
+                <Ionicons name="add" size={16} color={Colors.primary} />
+                <Text className="text-primary text-xs font-extrabold">
+                  {dict.workout.addExtraExercise}
+                </Text>
+              </Pressable>
             </View>
           ) : (
-            dayExercises.map((pe, idx) => {
+            <>
+              {allDayExercises.map((pe, idx) => {
               const sKey = slotPeKey(selectedDateStr, pe.id);
               const activeEx = getActiveExercise(pe);
+              const isCardio = isCardioExercise(activeEx);
+              const isExtra = pe.id.startsWith("extra_");
               const isSwapped = Boolean(swappedExerciseByPeId[sKey]);
               const previewUri =
                 activeEx.gif_url ?? activeEx.image_urls[0] ?? null;
@@ -1390,9 +1620,19 @@ export default function WorkoutScreen() {
 
                     <View className="flex-1">
                       <View className="flex-row items-center gap-1.5">
-                        <Text className="text-primary text-[11px] font-extrabold uppercase">
-                          {idx + 1} {dict.common.of} {dayExercises.length}
+                        <Text
+                          style={{ fontVariant: ["tabular-nums"] }}
+                          className="text-primary text-[11px] font-extrabold uppercase"
+                        >
+                          {idx + 1} {dict.common.of} {allDayExercises.length}
                         </Text>
+                        {isExtra && (
+                          <View className="px-1.5 py-0.5 rounded bg-primary-subtle">
+                            <Text className="text-primary text-[10px] font-bold">
+                              {dict.workout.extraBadge}
+                            </Text>
+                          </View>
+                        )}
                         {isSwapped && (
                           <View className="px-1.5 py-0.5 rounded bg-accent/20">
                             <Text className="text-accent text-[10px] font-bold">
@@ -1412,17 +1652,36 @@ export default function WorkoutScreen() {
                           {tMuscle(activeEx.muscle_group)} •{" "}
                           {tEquipment(activeEx.equipment)}
                         </Text>
-                        <Text className="text-text-muted text-xs">
-                          • {pe.target_sets}×{pe.target_reps} •{" "}
-                          {pe.rest_seconds}s
+                        <Text
+                          style={{ fontVariant: ["tabular-nums"] }}
+                          className="text-text-muted text-xs"
+                        >
+                          • {pe.target_sets}×{pe.target_reps}
+                          {pe.rest_seconds > 0 ? ` • ${pe.rest_seconds}s` : ""}
                         </Text>
                       </View>
                     </View>
 
-                    <View className="flex-row items-center gap-1.5">
+                    <View className="flex-row items-center gap-2">
+                      {isExtra && (
+                        <Pressable
+                          onPress={() => handleRemoveExtraExercise(pe)}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Remove ${activeEx.name}`}
+                          className="min-h-11 min-w-11 items-center justify-center rounded-xl bg-surface-elevated border border-border active:opacity-75"
+                        >
+                          <Ionicons
+                            name="close-outline"
+                            size={20}
+                            color={Colors.danger}
+                          />
+                        </Pressable>
+                      )}
                       <Pressable
                         onPress={() => handleOpenSwapModal(pe)}
-                        className="min-h-11 min-w-11 items-center justify-center rounded-xl bg-surface-elevated border border-border"
+                        accessibilityRole="button"
+                        accessibilityLabel={`Swap ${activeEx.name}`}
+                        className="min-h-11 min-w-11 items-center justify-center rounded-xl bg-surface-elevated border border-border active:opacity-75"
                       >
                         <Ionicons
                           name="swap-horizontal-outline"
@@ -1432,7 +1691,9 @@ export default function WorkoutScreen() {
                       </Pressable>
                       <Pressable
                         onPress={() => router.push(`/exercise/${activeEx.id}`)}
-                        className="min-h-11 min-w-11 items-center justify-center rounded-xl bg-surface-elevated border border-border"
+                        accessibilityRole="button"
+                        accessibilityLabel={`View details for ${activeEx.name}`}
+                        className="min-h-11 min-w-11 items-center justify-center rounded-xl bg-surface-elevated border border-border active:opacity-75"
                       >
                         <Ionicons
                           name="information-circle-outline"
@@ -1472,7 +1733,8 @@ export default function WorkoutScreen() {
                             suggestion.suggestedReps
                           )
                         }
-                        className="min-h-10 px-3.5 rounded-full bg-accent items-center justify-center"
+                        accessibilityRole="button"
+                        className="min-h-11 px-3.5 rounded-full bg-accent items-center justify-center active:opacity-75"
                       >
                         <Text className="text-white text-xs font-extrabold">
                           {dict.common.apply}
@@ -1490,10 +1752,10 @@ export default function WorkoutScreen() {
                       {dict.workout.colPrevious}
                     </Text>
                     <Text className="w-16 text-center text-text-muted text-[11px] font-bold">
-                      {dict.workout.colKg}
+                      {isCardio ? dict.workout.colKm : dict.workout.colKg}
                     </Text>
                     <Text className="w-14 text-center text-text-muted text-[11px] font-bold">
-                      {dict.workout.colReps}
+                      {isCardio ? dict.workout.colMin : dict.workout.colReps}
                     </Text>
                     <Text className="w-11 text-center text-text-muted text-[11px] font-bold">
                       ✓
@@ -1506,6 +1768,7 @@ export default function WorkoutScreen() {
                       <SetRow
                         key={row.local_key}
                         row={row}
+                        isCardio={isCardio}
                         onCycleType={() => handleCycleSetType(pe, row)}
                         onCopyPrevious={() => handleCopyPrevious(sKey, row)}
                         onChangeWeight={(val) =>
@@ -1520,6 +1783,18 @@ export default function WorkoutScreen() {
                             reps: val,
                           }))
                         }
+                        onChangeSpeed={(val) =>
+                          updateRow(sKey, row.local_key, (r) => ({
+                            ...r,
+                            speed_kmh: val,
+                          }))
+                        }
+                        onChangeIncline={(val) =>
+                          updateRow(sKey, row.local_key, (r) => ({
+                            ...r,
+                            incline_pct: val,
+                          }))
+                        }
                         onToggleComplete={() => handleToggleComplete(pe, row)}
                       />
                     ))}
@@ -1529,7 +1804,8 @@ export default function WorkoutScreen() {
                   <View className="flex-row gap-2 pt-1">
                     <Pressable
                       onPress={() => handleAddSet(pe)}
-                      className="flex-1 min-h-11 rounded-xl bg-surface-elevated border border-border items-center justify-center"
+                      accessibilityRole="button"
+                      className="flex-1 min-h-11 rounded-xl bg-surface-elevated border border-border items-center justify-center active:opacity-75"
                     >
                       <Text className="text-text-primary text-xs font-bold">
                         {dict.workout.addSet}
@@ -1538,7 +1814,8 @@ export default function WorkoutScreen() {
                     <Pressable
                       onPress={() => handleRemoveSet(pe)}
                       disabled={rows.length <= 1}
-                      className={`flex-1 min-h-11 rounded-xl bg-surface-elevated border border-border items-center justify-center ${
+                      accessibilityRole="button"
+                      className={`flex-1 min-h-11 rounded-xl bg-surface-elevated border border-border items-center justify-center active:opacity-75 ${
                         rows.length <= 1 ? "opacity-40" : ""
                       }`}
                     >
@@ -1549,7 +1826,36 @@ export default function WorkoutScreen() {
                   </View>
                 </View>
               );
-            })
+              })}
+
+              <Pressable
+                onPress={() => setExtraPickerVisible(true)}
+                accessibilityRole="button"
+                className="min-h-11 rounded-2xl bg-surface-elevated border border-dashed border-primary/60 flex-row items-center justify-center gap-2 active:opacity-75"
+              >
+                <Ionicons name="add" size={18} color={Colors.primary} />
+                <Text className="text-primary text-xs font-extrabold">
+                  {dict.workout.addExtraExercise}
+                </Text>
+              </Pressable>
+
+              {completedSetsCount > 0 && (
+                <Pressable
+                  onPress={() => setFinishModalVisible(true)}
+                  style={Shadows.card}
+                  accessibilityRole="button"
+                  className="min-h-12 rounded-2xl bg-primary flex-row items-center justify-center gap-2 mt-1 active:opacity-75"
+                >
+                  <Ionicons name="checkmark-done" size={20} color="#000000" />
+                  <Text
+                    style={{ fontVariant: ["tabular-nums"] }}
+                    className="text-black text-sm font-extrabold"
+                  >
+                    {dict.workout.completeWorkout} ({completedSetsCount})
+                  </Text>
+                </Pressable>
+              )}
+            </>
           )}
         </ScrollView>
       </KeyboardAvoidingView>
@@ -1593,7 +1899,8 @@ export default function WorkoutScreen() {
             </View>
             <Pressable
               onPress={() => setSwapTargetPe(null)}
-              className="min-h-11 min-w-11 items-center justify-center px-2"
+              accessibilityRole="button"
+              className="min-h-11 min-w-11 items-center justify-center px-2 active:opacity-75"
             >
               <Text className="text-primary text-base font-bold">
                 {dict.common.cancel}
@@ -1619,7 +1926,8 @@ export default function WorkoutScreen() {
                   <Pressable
                     onPress={() => handleSelectSwapExercise(item)}
                     style={Shadows.card}
-                    className="p-3 rounded-2xl bg-surface border border-border flex-row items-center gap-3"
+                    accessibilityRole="button"
+                    className="p-3 rounded-2xl bg-surface border border-border flex-row items-center gap-3 active:opacity-75"
                   >
                     <View className="w-12 h-12 rounded-xl bg-media-frame overflow-hidden items-center justify-center">
                       {previewUri ? (
@@ -1713,7 +2021,8 @@ export default function WorkoutScreen() {
               <Pressable
                 onPress={() => setFinishModalVisible(false)}
                 disabled={completing}
-                className="flex-1 min-h-11 rounded-xl bg-surface-elevated border border-border items-center justify-center"
+                accessibilityRole="button"
+                className="flex-1 min-h-11 rounded-xl bg-surface-elevated border border-border items-center justify-center active:opacity-75"
               >
                 <Text className="text-text-secondary text-sm font-semibold">
                   {dict.workout.keepLifting}
@@ -1722,7 +2031,8 @@ export default function WorkoutScreen() {
               <Pressable
                 onPress={handleFinishWorkout}
                 disabled={completing}
-                className="flex-1 min-h-11 rounded-xl bg-primary items-center justify-center"
+                accessibilityRole="button"
+                className="flex-1 min-h-11 rounded-xl bg-primary items-center justify-center active:opacity-75"
               >
                 <Text className="text-black text-sm font-extrabold">
                   {completing
@@ -1744,6 +2054,14 @@ export default function WorkoutScreen() {
           setAssignScopeOverride(null);
           setCompletedBanner(null);
         }}
+      />
+
+      <ExercisePickerModal
+        visible={extraPickerVisible}
+        title={dict.workout.addExtraTitle}
+        onClose={() => setExtraPickerVisible(false)}
+        onSelect={handleAddExtraExercise}
+        existingExerciseIds={existingDayExerciseIds}
       />
     </SafeAreaView>
   );

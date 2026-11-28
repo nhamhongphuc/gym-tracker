@@ -97,6 +97,8 @@ CREATE TABLE IF NOT EXISTS set_logs (
   set_type TEXT NOT NULL DEFAULT 'working' CHECK (set_type IN ('warmup', 'working', 'dropset', 'failure')),
   weight_kg NUMERIC(6,2) NOT NULL DEFAULT 0,
   reps INT NOT NULL DEFAULT 0,
+  speed_kmh NUMERIC(5,2) CHECK (speed_kmh IS NULL OR speed_kmh >= 0),
+  incline_pct NUMERIC(4,1) CHECK (incline_pct IS NULL OR (incline_pct >= -10 AND incline_pct <= 50)),
   rpe NUMERIC(3,1),
   is_completed BOOLEAN DEFAULT true,
   created_at TIMESTAMPTZ DEFAULT now()

@@ -17,6 +17,7 @@ import { LanguageToggle } from "@/components/LanguageToggle";
 import { Colors, Shadows } from "@/constants/theme";
 import { formatTemplate, useI18n } from "@/i18n/LanguageContext";
 import { fetchExercises } from "@/lib/api";
+import { isCardioExercise } from "@/lib/exerciseUnits";
 import type { Exercise } from "@/types/database";
 
 const MUSCLE_FILTERS = [
@@ -91,7 +92,12 @@ export default function ExercisesScreen() {
     const eqFilter = selectedEquipment.toLowerCase();
 
     return exercises.filter((ex) => {
-      if (selectedMuscle !== "All" && ex.muscle_group !== selectedMuscle) {
+      if (selectedMuscle === "Cardio") {
+        if (!isCardioExercise(ex)) return false;
+      } else if (
+        selectedMuscle !== "All" &&
+        ex.muscle_group !== selectedMuscle
+      ) {
         return false;
       }
       if (
@@ -124,6 +130,7 @@ export default function ExercisesScreen() {
         <Pressable
           onPress={() => router.push(`/exercise/${item.id}`)}
           style={Shadows.card}
+          accessibilityRole="button"
           className="mx-4 mb-2.5 p-3 rounded-2xl bg-surface border border-border flex-row items-center gap-3 active:opacity-80"
         >
           <View className="w-[52px] h-[52px] rounded-xl bg-media-frame overflow-hidden items-center justify-center">
@@ -185,7 +192,10 @@ export default function ExercisesScreen() {
             <Text className="text-text-primary text-2xl font-extrabold">
               {dict.exercises.title}
             </Text>
-            <Text className="text-primary text-xs font-bold">
+            <Text
+              style={{ fontVariant: ["tabular-nums"] }}
+              className="text-primary text-xs font-bold"
+            >
               {filteredExercises.length} {dict.common.of} {exercises.length}
             </Text>
           </View>
@@ -205,7 +215,9 @@ export default function ExercisesScreen() {
           {search.length > 0 && (
             <Pressable
               onPress={() => setSearch("")}
-              className="min-h-11 min-w-11 items-center justify-center"
+              accessibilityRole="button"
+              accessibilityLabel="Clear search"
+              className="min-h-11 min-w-11 items-center justify-center active:opacity-75"
             >
               <Ionicons
                 name="close-circle"
@@ -228,7 +240,9 @@ export default function ExercisesScreen() {
               <Pressable
                 key={muscle}
                 onPress={() => setSelectedMuscle(muscle)}
-                className={`min-h-9 px-3.5 rounded-full border items-center justify-center ${
+                accessibilityRole="button"
+                accessibilityState={{ selected: active }}
+                className={`min-h-11 px-3.5 rounded-full border items-center justify-center active:opacity-75 ${
                   active
                     ? "bg-primary border-primary"
                     : "bg-surface-elevated border-border"
@@ -258,7 +272,10 @@ export default function ExercisesScreen() {
               <Pressable
                 key={eq}
                 onPress={() => setSelectedEquipment(eq)}
-                className={`min-h-8 px-3 rounded-lg border items-center justify-center ${
+                hitSlop={{ top: 4, bottom: 4 }}
+                accessibilityRole="button"
+                accessibilityState={{ selected: active }}
+                className={`min-h-10 px-3 rounded-lg border items-center justify-center active:opacity-75 ${
                   active
                     ? "bg-accent/20 border-accent"
                     : "bg-background border-border"
@@ -297,7 +314,8 @@ export default function ExercisesScreen() {
           </Text>
           <Pressable
             onPress={() => loadExercises(true)}
-            className="min-h-11 px-5 rounded-xl bg-primary items-center justify-center"
+            accessibilityRole="button"
+            className="min-h-11 px-5 rounded-xl bg-primary items-center justify-center active:opacity-75"
           >
             <Text className="text-black text-sm font-extrabold">
               {dict.common.retry}
@@ -343,7 +361,8 @@ export default function ExercisesScreen() {
       <Pressable
         onPress={() => setModalVisible(true)}
         style={Shadows.card}
-        className="absolute right-4 bottom-4 min-h-12 px-4 rounded-full bg-primary flex-row items-center gap-1.5"
+        accessibilityRole="button"
+        className="absolute right-4 bottom-4 min-h-12 px-4 rounded-full bg-primary flex-row items-center gap-1.5 active:opacity-75"
       >
         <Ionicons name="add" size={20} color="#000000" />
         <Text className="text-black text-sm font-extrabold">

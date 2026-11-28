@@ -199,7 +199,8 @@ export function ProgramManagerModal({
           </Text>
           <Pressable
             onPress={onClose}
-            className="min-h-11 min-w-11 items-center justify-center px-2"
+            accessibilityRole="button"
+            className="min-h-11 min-w-11 items-center justify-center px-2 active:opacity-75"
           >
             <Text className="text-primary text-base font-bold">
               {dict.common.done}
@@ -222,7 +223,9 @@ export function ProgramManagerModal({
                 <Pressable
                   key={tab.key}
                   onPress={() => setActiveTab(tab.key)}
-                  className={`flex-1 min-h-10 rounded-lg items-center justify-center ${
+                  accessibilityRole="button"
+                  accessibilityState={{ selected }}
+                  className={`flex-1 min-h-11 rounded-lg items-center justify-center active:opacity-75 ${
                     selected ? "bg-primary" : ""
                   }`}
                 >
@@ -289,7 +292,9 @@ export function ProgramManagerModal({
                         <Pressable
                           onPress={() => confirmDelete(prog)}
                           disabled={Boolean(busyKey)}
-                          className="min-h-10 min-w-10 rounded-xl bg-surface-elevated border border-border items-center justify-center"
+                          accessibilityRole="button"
+                          accessibilityLabel={`Delete ${prog.name}`}
+                          className="min-h-11 min-w-11 rounded-xl bg-surface-elevated border border-border items-center justify-center active:opacity-75"
                         >
                           <Ionicons
                             name="trash-outline"
@@ -305,7 +310,8 @@ export function ProgramManagerModal({
                         <Pressable
                           onPress={() => handleToggleMode(prog)}
                           disabled={Boolean(busyKey)}
-                          className="px-3 py-1.5 rounded-full bg-surface-elevated border border-border flex-row items-center gap-1.5"
+                          accessibilityRole="button"
+                          className="min-h-11 px-3.5 rounded-full bg-surface-elevated border border-border flex-row items-center gap-1.5 active:opacity-75"
                         >
                           <Ionicons
                             name={
@@ -333,7 +339,8 @@ export function ProgramManagerModal({
                         <Pressable
                           onPress={() => handleActivate(prog.id)}
                           disabled={Boolean(busyKey)}
-                          className="min-h-10 px-4 rounded-full bg-primary items-center justify-center"
+                          accessibilityRole="button"
+                          className="min-h-11 px-4 rounded-full bg-primary items-center justify-center active:opacity-75"
                         >
                           {isBusy ? (
                             <ActivityIndicator size="small" color="#000000" />
@@ -390,7 +397,8 @@ export function ProgramManagerModal({
                       <Pressable
                         onPress={() => handleCreatePreset(preset.key)}
                         disabled={Boolean(busyKey)}
-                        className="min-h-11 rounded-xl bg-primary flex-row items-center justify-center gap-2"
+                        accessibilityRole="button"
+                        className="min-h-11 rounded-xl bg-primary flex-row items-center justify-center gap-2 active:opacity-75"
                       >
                         {isCreating ? (
                           <>
@@ -460,7 +468,9 @@ export function ProgramManagerModal({
                         <Pressable
                           key={mode}
                           onPress={() => setCustomMode(mode)}
-                          className={`flex-1 rounded-xl border p-3 gap-1 ${
+                          accessibilityRole="button"
+                          accessibilityState={{ selected }}
+                          className={`flex-1 rounded-xl border p-3 gap-1 active:opacity-75 ${
                             selected
                               ? "bg-primary-subtle border-primary"
                               : "bg-surface-elevated border-border"
@@ -498,13 +508,16 @@ export function ProgramManagerModal({
                           <Pressable
                             key={n}
                             onPress={() => setSlotCount(n)}
-                            className={`flex-1 min-h-11 rounded-xl border items-center justify-center ${
+                            accessibilityRole="button"
+                            accessibilityState={{ selected }}
+                            className={`flex-1 min-h-11 rounded-xl border items-center justify-center active:opacity-75 ${
                               selected
                                 ? "bg-primary border-primary"
                                 : "bg-surface-elevated border-border"
                             }`}
                           >
                             <Text
+                              style={{ fontVariant: ["tabular-nums"] }}
                               className={`text-sm font-extrabold ${
                                 selected ? "text-black" : "text-text-secondary"
                               }`}
@@ -521,7 +534,8 @@ export function ProgramManagerModal({
                 <Pressable
                   onPress={handleCreateCustom}
                   disabled={Boolean(busyKey)}
-                  className="min-h-12 rounded-xl bg-primary items-center justify-center mt-1"
+                  accessibilityRole="button"
+                  className="min-h-12 rounded-xl bg-primary items-center justify-center mt-1 active:opacity-75"
                 >
                   {busyKey === "custom_create" ? (
                     <ActivityIndicator size="small" color="#000000" />

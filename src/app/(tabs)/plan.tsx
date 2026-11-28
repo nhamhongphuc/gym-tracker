@@ -563,7 +563,8 @@ export default function PlanScreen() {
           </Text>
           <Pressable
             onPress={loadPlans}
-            className="min-h-11 px-5 rounded-xl bg-primary items-center justify-center"
+            accessibilityRole="button"
+            className="min-h-11 px-5 rounded-xl bg-primary items-center justify-center active:opacity-75"
           >
             <Text className="text-black text-sm font-extrabold">
               {dict.common.retry}
@@ -595,7 +596,8 @@ export default function PlanScreen() {
           <View className="flex-row items-center gap-2">
             <Pressable
               onPress={() => setProgramModalVisible(true)}
-              className="min-h-10 px-3 rounded-full bg-surface-elevated border border-border flex-row items-center gap-1.5"
+              accessibilityRole="button"
+              className="min-h-11 px-3.5 rounded-full bg-surface-elevated border border-border flex-row items-center gap-1.5 active:opacity-75"
             >
               <Ionicons
                 name="layers-outline"
@@ -618,7 +620,9 @@ export default function PlanScreen() {
               <Pressable
                 key={mode}
                 onPress={() => handleSwitchProgramMode(mode)}
-                className={`flex-1 min-h-9 rounded-lg flex-row items-center justify-center gap-1.5 ${
+                accessibilityRole="button"
+                accessibilityState={{ selected: active }}
+                className={`flex-1 min-h-11 rounded-lg flex-row items-center justify-center gap-1.5 active:opacity-75 ${
                   active ? "bg-primary" : ""
                 }`}
               >
@@ -659,13 +663,16 @@ export default function PlanScreen() {
                 <Pressable
                   key={routine.id}
                   onPress={() => handleSelectPlan(routine)}
-                  className={`min-h-10 px-3.5 rounded-full border flex-row items-center gap-1.5 ${
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: active }}
+                  className={`min-h-11 px-3.5 rounded-full border flex-row items-center gap-1.5 active:opacity-75 ${
                     active
                       ? "bg-primary border-primary"
                       : "bg-surface-elevated border-border"
                   }`}
                 >
                   <Text
+                    style={{ fontVariant: ["tabular-nums"] }}
                     className={`text-xs font-extrabold ${
                       active ? "text-black" : "text-text-primary"
                     }`}
@@ -685,7 +692,8 @@ export default function PlanScreen() {
 
             <Pressable
               onPress={handleAddRoutineSlot}
-              className="min-h-10 px-3.5 rounded-full border border-dashed border-primary/70 bg-primary-subtle flex-row items-center justify-center"
+              accessibilityRole="button"
+              className="min-h-11 px-3.5 rounded-full border border-dashed border-primary/70 bg-primary-subtle flex-row items-center justify-center active:opacity-75"
             >
               <Text className="text-primary text-xs font-extrabold">
                 {dict.plan.addRoutineBtn}
@@ -708,7 +716,9 @@ export default function PlanScreen() {
                 <Pressable
                   key={day}
                   onPress={() => handleSelectPlan(planForDay ?? null)}
-                  className="min-h-11 min-w-11 items-center justify-center gap-1"
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: active }}
+                  className="min-h-11 min-w-11 items-center justify-center gap-1 active:opacity-75"
                 >
                   <View
                     className={`w-10 h-10 rounded-full border items-center justify-center ${
@@ -832,7 +842,8 @@ export default function PlanScreen() {
             <Pressable
               onPress={handleSaveDayMeta}
               disabled={savingMeta}
-              className="min-h-11 rounded-xl bg-primary-subtle border border-primary/50 items-center justify-center"
+              accessibilityRole="button"
+              className="min-h-11 rounded-xl bg-primary-subtle border border-primary/50 items-center justify-center active:opacity-75"
             >
               <Text className="text-primary text-sm font-bold">
                 {savingMeta ? dict.common.saving : dict.plan.saveSettings}
@@ -845,7 +856,8 @@ export default function PlanScreen() {
                   <Pressable
                     onPress={handleSetUpNextInQueue}
                     disabled={activeProgram.next_routine_id === selectedPlan.id}
-                    className={`flex-1 min-h-10 rounded-xl border items-center justify-center ${
+                    accessibilityRole="button"
+                    className={`flex-1 min-h-11 rounded-xl border items-center justify-center active:opacity-75 ${
                       activeProgram.next_routine_id === selectedPlan.id
                         ? "bg-primary border-primary"
                         : "bg-surface-elevated border-border"
@@ -868,7 +880,8 @@ export default function PlanScreen() {
                 {plans.length > 1 && (
                   <Pressable
                     onPress={confirmDeleteRoutine}
-                    className="min-h-10 px-3.5 rounded-xl bg-surface-elevated border border-border items-center justify-center"
+                    accessibilityRole="button"
+                    className="min-h-11 px-3.5 rounded-xl bg-surface-elevated border border-border items-center justify-center active:opacity-75"
                   >
                     <Text className="text-danger text-xs font-bold">
                       {dict.plan.deleteRoutineBtn}
@@ -925,7 +938,8 @@ export default function PlanScreen() {
                           onPress={() =>
                             router.push(`/exercise/${pe.exercise_id}`)
                           }
-                          className="flex-1 flex-row items-center gap-3"
+                          accessibilityRole="button"
+                          className="flex-1 flex-row items-center gap-3 active:opacity-75"
                         >
                           <View className="w-12 h-12 rounded-xl bg-media-frame overflow-hidden items-center justify-center">
                             {previewUri ? (
@@ -964,11 +978,14 @@ export default function PlanScreen() {
                           </View>
                         </Pressable>
 
-                        <View className="flex-row items-center gap-1">
+                        <View className="flex-row items-center gap-2">
                           <Pressable
                             onPress={() => handleMove(idx, -1)}
                             disabled={idx === 0}
-                            className={`min-h-11 min-w-11 rounded-xl bg-surface-elevated border border-border items-center justify-center ${
+                            accessibilityRole="button"
+                            accessibilityLabel={`Move ${pe.exercise.name} up`}
+                            accessibilityState={{ disabled: idx === 0 }}
+                            className={`min-h-11 min-w-11 rounded-xl bg-surface-elevated border border-border items-center justify-center active:opacity-75 ${
                               idx === 0 ? "opacity-35" : ""
                             }`}
                           >
@@ -981,7 +998,12 @@ export default function PlanScreen() {
                           <Pressable
                             onPress={() => handleMove(idx, 1)}
                             disabled={idx === dayExercises.length - 1}
-                            className={`min-h-11 min-w-11 rounded-xl bg-surface-elevated border border-border items-center justify-center ${
+                            accessibilityRole="button"
+                            accessibilityLabel={`Move ${pe.exercise.name} down`}
+                            accessibilityState={{
+                              disabled: idx === dayExercises.length - 1,
+                            }}
+                            className={`min-h-11 min-w-11 rounded-xl bg-surface-elevated border border-border items-center justify-center active:opacity-75 ${
                               idx === dayExercises.length - 1
                                 ? "opacity-35"
                                 : ""
@@ -995,7 +1017,9 @@ export default function PlanScreen() {
                           </Pressable>
                           <Pressable
                             onPress={() => confirmRemoveExercise(pe)}
-                            className="min-h-11 min-w-11 rounded-xl bg-surface-elevated border border-border items-center justify-center"
+                            accessibilityRole="button"
+                            accessibilityLabel={`Remove ${pe.exercise.name}`}
+                            className="min-h-11 min-w-11 rounded-xl bg-surface-elevated border border-border items-center justify-center active:opacity-75"
                           >
                             <Ionicons
                               name="trash-outline"
@@ -1044,6 +1068,7 @@ export default function PlanScreen() {
                             onBlur={() => handlePersistExerciseTargets(pe)}
                             placeholder="8-12"
                             placeholderTextColor={Colors.textMuted}
+                            style={{ fontVariant: ["tabular-nums"] }}
                             className="min-h-11 bg-surface-elevated border border-border rounded-xl px-3 text-text-primary text-sm font-bold text-center"
                           />
                         </View>
@@ -1078,7 +1103,8 @@ export default function PlanScreen() {
               <Pressable
                 onPress={() => setPickerVisible(true)}
                 style={Shadows.card}
-                className="min-h-12 rounded-2xl bg-primary flex-row items-center justify-center gap-2 mt-1"
+                accessibilityRole="button"
+                className="min-h-12 rounded-2xl bg-primary flex-row items-center justify-center gap-2 mt-1 active:opacity-75"
               >
                 <Ionicons name="add-circle" size={20} color="#000000" />
                 <Text className="text-black text-sm font-extrabold">

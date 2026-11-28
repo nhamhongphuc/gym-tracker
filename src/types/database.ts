@@ -105,6 +105,8 @@ export interface SetLog {
   set_type: SetType;
   weight_kg: number;
   reps: number;
+  speed_kmh?: number | null;
+  incline_pct?: number | null;
   rpe?: number | null;
   is_completed: boolean;
   created_at?: string;
@@ -116,14 +118,19 @@ export interface DraftSetRow {
   set_type: SetType;
   weight_kg: string;
   reps: string;
+  speed_kmh?: string;
+  incline_pct?: string;
   prev_weight_kg?: number;
   prev_reps?: number;
+  prev_speed_kmh?: number | null;
+  prev_incline_pct?: number | null;
   is_completed: boolean;
   saved_log_id?: string;
 }
 
 export interface ExercisePRStats {
   maxWeightKg: number;
+  maxReps: number;
   bestEstimated1RM: number;
   recentSessions: {
     sessionDate: string;
@@ -131,6 +138,8 @@ export interface ExercisePRStats {
       set_number: number;
       weight_kg: number;
       reps: number;
+      speed_kmh?: number | null;
+      incline_pct?: number | null;
       set_type: SetType;
     }[];
   }[];

@@ -12,8 +12,8 @@ export const Colors = {
   purple: "#BF5AF2",
   danger: "#FF375F",
   textPrimary: "#FFFFFF",
-  textSecondary: "#8E8E93",
-  textMuted: "#48484A",
+  textSecondary: "#B4B4BC",
+  textMuted: "#8E8E93",
   border: "#26262B",
 } as const;
 

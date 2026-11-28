@@ -53,7 +53,8 @@ export function MuscleBodyMap({
         {selectedMuscle && (
           <Pressable
             onPress={() => onSelectMuscle(null)}
-            className="min-h-9 px-3 rounded-full bg-surface-elevated border border-border items-center justify-center"
+            accessibilityRole="button"
+            className="min-h-11 px-3.5 rounded-full bg-surface-elevated border border-border items-center justify-center active:opacity-75"
           >
             <Text className="text-primary text-xs font-bold">
               {dict.bodyMap.showAll}

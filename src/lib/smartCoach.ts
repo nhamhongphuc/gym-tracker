@@ -1,6 +1,7 @@
 import { en } from "@/i18n/en";
 import { formatTemplate, type Locale } from "@/i18n/LanguageContext";
 import { vi } from "@/i18n/vi";
+import { isCardioExercise } from "@/lib/exerciseUnits";
 import type {
   Exercise,
   PlanExerciseWithDetails,
@@ -79,7 +80,7 @@ export function computeSmartSuggestion(
   previousLogs: SetLog[],
   locale: Locale = "en"
 ): SmartSuggestion | null {
-  if (previousLogs.length === 0) return null;
+  if (isCardioExercise(pe.exercise) || previousLogs.length === 0) return null;
 
   const repRange = parseTargetRepRange(pe.target_reps);
   if (!repRange) return null;
@@ -199,6 +200,7 @@ export function computeMuscleAnalytics(
 
     for (const log of session.set_logs ?? []) {
       if (!log.is_completed) continue;
+      if (isCardioExercise(log.exercise)) continue;
       const group = log.exercise?.muscle_group;
       if (!group || !accum[group]) continue;
 
